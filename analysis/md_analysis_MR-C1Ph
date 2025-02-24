@@ -1,0 +1,116 @@
+#!/bin/env python
+
+import MDAnalysis as mda
+from MDAnalysis.analysis.distances import distance_array
+import numpy as np
+import matplotlib.pyplot as plt
+from numpy.linalg import svd
+import argparse
+ 
+parser = argparse.ArgumentParser(description="分子轨迹.pdb 分析分子片段平面性")
+parser.add_argument('-f',"--file",required=True,type=str, help="pdb文件")
+parser.add_argument('-p',"--plane",required=True,type=str, help="原子序号，用法“1,22,45,54” 平面编号")
+
+args = parser.parse_args()
+
+# 你的轨迹文件和拓扑文件
+xyz_file = args.file
+plane_atoms_str = args.plane
+
+print(f'plane:{plane_atoms_str}')
+
+# topology_file = 'your_topology.pdb'  # 使用你的拓扑文件
+
+plt.rcParams['font.sans-serif'] = ['Arial']  # 使用黑体
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
+def parse_atom_indices(atom_indices_str):
+    indices = []
+    for part in atom_indices_str.split(','):
+        if '-' in part:
+            start, end = part.split('-')
+            indices.extend(range(int(start), int(end) + 1))
+        else:
+            indices.append(int(part))
+    indices = np.array(indices) - 1   # MDAnalysis 与 Gaussian 中编号不同，需要修改
+    return indices
+
+# 解析原子编号
+plane_atoms = parse_atom_indices(plane_atoms_str)
+
+# 加载轨迹
+u = mda.Universe(xyz_file)
+
+# 选择平面
+plane = u.select_atoms(f'index {" ".join(map(str, plane_atoms))}')
+
+# 初始化列表以保存每一帧的平面性（偏离平面的程度）
+planarity_deviation = []
+
+# 遍历所有帧
+for ts in u.trajectory:
+    # 获取当前帧中平面原子的坐标
+    coords = u.atoms[plane_atoms].positions
+    
+    # 使用SVD方法计算分子片段的平面性
+    # 中心化坐标
+    centroid = np.mean(coords, axis=0)
+    coords_centered = coords - centroid
+    
+    # 进行奇异值分解
+    _, _, vh = svd(coords_centered)
+    
+    # 最后一个奇异值对应的是分子片段偏离平面的程度
+    normal_vector = vh[-1, :]
+    
+    # 计算偏离平面的程度，使用平方和开根号的方式计算
+    deviation = np.sqrt(np.sum(np.dot(coords_centered, normal_vector) ** 2))
+    
+    # 将当前帧的偏离平面程度保存
+    planarity_deviation.append(deviation)
+
+# 计算平面性偏离的统计量
+max_dev = max(planarity_deviation)
+min_dev = min(planarity_deviation)
+mean_dev = np.mean(planarity_deviation)
+variance_dev = np.var(planarity_deviation)
+
+# 将平面性随时间变化的图像保存
+plt.figure(figsize=(10, 6))
+plt.plot(planarity_deviation, label='Planarity Deviation')
+plt.xlabel('Frame')
+plt.ylabel('Deviation from Plane (Å)')
+plt.title('Planarity Deviation Over Time')
+plt.legend()
+plt.grid(True)
+plt.savefig('planarity_deviation.png')
+plt.show()
+
+# 绘制偏离平面程度的分布直方图
+plt.figure(figsize=(10, 6))
+plt.hist(planarity_deviation, bins=30, color='c', edgecolor='k', alpha=0.7)
+plt.xlabel('Deviation from Plane (Å)')
+plt.ylabel('Frequency')
+plt.title('Distribution of Planarity Deviation')
+plt.grid(True)
+plt.savefig('planarity_deviation_histogram.png')
+plt.show()
+
+print(f'最大偏离平面程度: {max_dev:.3f} Å')
+print(f'最小偏离平面程度: {min_dev:.3f} Å')
+print(f'平均偏离平面程度: {mean_dev:.3f} Å')
+print(f'偏离平面程度的方差: {variance_dev:.3f} Å²')
+
+# 输出文件名
+output_filename = "planarity_deviation_output.txt"
+
+# 将平面性偏离数据写入文件
+with open(output_filename, 'w') as f:
+    f.write("Frame\tDeviation_from_Plane (Å)\n")
+    for idx, deviation in enumerate(planarity_deviation):
+        f.write(f"{idx + 1}\t{deviation:.3f}\n")
+
+print(f'平面性偏离数据已写入 {output_filename}')
+
+
+

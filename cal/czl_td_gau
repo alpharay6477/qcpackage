@@ -1,0 +1,81 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo
+    echo "用法: $(basename "$0") [pattern.log]"
+    echo
+    echo "如果提供了文件模式，则处理匹配的 .log 文件"
+    echo "如果未提供文件模式，则处理当前目录下的所有 .log 文件"
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# 如果传入了文件模式，则使用该模式，否则使用所有 .log 文件
+file_pattern="*.log"
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+# 计算是否正常结束
+freq_num=0
+for inf in $file_pattern; do
+    if [[ $(grep "frequencies" $inf | wc -l) -gt 2 ]]; then
+        ((freq_num++))
+    fi
+done
+
+# 计算正常结束的文件数量
+finish_num=$(grep "Normal termination of Gaussian" $file_pattern | wc -l)
+
+# 计算传入文件数量
+file_num=$(ls -1 ${file_pattern} 2>/dev/null | wc -l)
+echo "当前文件夹计算了 $file_num 文件"
+
+# 检查 log 文件是否正常结束
+echo "检查 log 文件是否正常结束"
+if [[ $finish_num -ne $((file_num + freq_num)) ]]; then
+    echo "计算未正常结束，条件：$finish_num ≠ $((file_num + freq_num)) "
+    exit 0
+fi
+
+echo "已正常结束，开始计算激发态，条件：$finish_num ＝ $((file_num + freq_num)) "
+
+# 创建目录，如果它们不存在
+mkdir -p ./tdopt
+mkdir -p ./tdvert
+
+# 处理 .log 文件生成 .gjf 文件
+qcinp.py -a 'td(50-50,nstates=10)' -A '_tdopt' ${file_pattern}
+qcinp.py -r 'opt' -a 'td(50-50,nstates=20)' -A '_tdvert' ${file_pattern}
+
+# 移动生成的 .gjf 文件到各自的目录
+mv *_tdvert.gjf ./tdvert
+mv *_tdopt.gjf ./tdopt
+
+# 等待所有后台进程完成
+wait
+
+# 切换到 tdvert 目录并运行 g16s
+cd ./tdvert
+if ls *_tdvert.gjf 1> /dev/null 2>&1; then
+    g16s *_tdvert.gjf
+else
+    echo "tdvert 目录中没有找到 *_tdvert.gjf 文件。"
+fi
+
+# 切换到 tdopt 目录并运行 g16s
+cd ../tdopt
+if ls *_tdopt.gjf 1> /dev/null 2>&1; then
+    g16s *_tdopt.gjf
+else
+    echo "tdopt 目录中没有找到 *_tdopt.gjf 文件。"
+fi
+
+# 返回到原始目录
+cd ../
+

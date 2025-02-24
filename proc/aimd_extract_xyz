@@ -1,0 +1,34 @@
+#!/bin/env python
+
+import argparse
+import MDAnalysis as mda
+
+def extract_frame(trajectory_file, frame_number):
+    # 加载PDB结构文件和轨迹文件
+    u = mda.Universe(trajectory_file)
+    
+    # 选择特定帧
+    u.trajectory[frame_number]
+    
+    # 选择所有原子（或根据需要选择特定原子）
+    atoms = u.atoms
+    
+    # 导出选定帧的坐标到新的PDB文件
+    output_filename = f"frame_{frame_number}.pdb"
+    with mda.Writer(output_filename, atoms.n_atoms) as W:
+        W.write(atoms)
+    
+    print(f"Frame {frame_number} has been written to {output_filename}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Extract a specific frame from a PDB trajectory.")
+    parser.add_argument("-f", "--trajectory", required=True, help="Path to the PDB trajectory file")
+    parser.add_argument("-n", "--frame", type=int, required=True, help="Frame number to extract")
+    
+    args = parser.parse_args()
+    
+    extract_frame(args.trajectory, args.frame)
+
+if __name__ == "__main__":
+    main()
+

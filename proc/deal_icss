@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.gjf] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *_icss.gjf 文件使用"
+    echo ""
+    echo "当前目录下计算好的 icss 17 个文件"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*_icss.gjf"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_gif() {
+    local ito=$1
+    echo "Converting .gjf"
+    Multiwfn ${ito} << EOF > /dev/null 2>&1
+25
+3
+-10
+12
+1
+n
+./NICS
+1
+2
+0
+3
+-10
+12
+1
+n
+./NICS
+5
+2
+exit
+EOF
+}
+
+
+# 处理文件
+deal_gif "$file_pattern"
+
+rm slurm-*
+rm sub_*
+rm *.runstats
+
+wait
+# 拼接 settings.ini 文件的完整路径
+settings_file="$Multiwfnpath/settings.ini"
+
+# 检查 settings.ini 文件是否存在
+if [ -f "$settings_file" ]; then
+  # 复制 settings.ini 到当前路径
+  cp "$settings_file" .
+  echo "settings.ini 文件已复制到当前路径"
+else
+  echo "未找到 settings.ini 文件"
+  exit 1
+fi
+
+sed -i 's/iuserfunc= 0/iuserfunc= -1/g' settings.ini
+
+exit 0
+

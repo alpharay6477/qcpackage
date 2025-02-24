@@ -1,0 +1,390 @@
+#!/bin/env python
+import numpy as np
+import argparse
+import os
+import subprocess
+
+parser = argparse.ArgumentParser(description="将多个文件名分别赋值给不同变量的Python脚本")
+parser.add_argument("fchk", nargs="+",type=str, help="第一个fchk文件名")
+
+args = parser.parse_args()
+
+# 将文件名分别赋值给不同的变量
+fchkfile = args.fchk
+
+
+a2mass = {
+    1: 1.008,      # Hydrogen
+    2: 4.002602,   # Helium
+    3: 6.94,       # Lithium
+    4: 9.0122,     # Beryllium
+    5: 10.81,      # Boron
+    6: 12.011,     # Carbon
+    7: 14.007,     # Nitrogen
+    8: 15.999,     # Oxygen
+    9: 18.998,     # Fluorine
+    10: 20.180,    # Neon
+    11: 22.990,    # Sodium
+    12: 24.305,    # Magnesium
+    13: 26.982,    # Aluminum
+    14: 28.085,    # Silicon
+    15: 30.974,    # Phosphorus
+    16: 32.06,     # Sulfur
+    17: 35.45,     # Chlorine
+    18: 39.948,    # Argon
+    19: 39.098,    # Potassium
+    20: 40.078,    # Calcium
+    21: 44.955908, # Scandium
+    22: 47.867,    # Titanium
+    23: 50.9415,   # Vanadium
+    24: 51.9961,   # Chromium
+    25: 54.938044, # Manganese
+    26: 55.845,    # Iron
+    27: 58.933194, # Cobalt
+    28: 58.6934,   # Nickel
+    29: 63.546,    # Copper
+    30: 65.38,     # Zinc
+    31: 69.723,    # Gallium
+    32: 72.63,     # Germanium
+    33: 74.92160,  # Arsenic
+    34: 78.96,     # Selenium
+    35: 79.904,    # Bromine
+    36: 83.798,    # Krypton
+    37: 85.4678,   # Rubidium
+    38: 87.62,     # Strontium
+    39: 88.90584,  # Yttrium
+    40: 91.224,    # Zirconium
+    41: 92.90637,  # Niobium
+    42: 95.95,     # Molybdenum
+    43: 98,        # Technetium (most stable isotope)
+    44: 101.07,    # Ruthenium
+    45: 102.90550, # Rhodium
+    46: 106.42,    # Palladium
+    47: 107.8682,  # Silver
+    48: 112.414,   # Cadmium
+    49: 114.818,   # Indium
+    50: 118.710,   # Tin
+    51: 121.760,   # Antimony
+    52: 127.60,    # Tellurium
+    53: 126.90447, # Iodine
+    54: 131.293,   # Xenon
+    55: 132.90545196, # Cesium
+    56: 137.327,   # Barium
+    57: 138.90547, # Lanthanum
+    58: 140.116,   # Cerium
+    59: 140.90766, # Praseodymium
+    60: 144.242,   # Neodymium
+    61: 145,       # Promethium (most stable isotope)
+    62: 150.36,    # Samarium
+    63: 151.964,   # Europium
+    64: 157.25,    # Gadolinium
+    65: 158.92535, # Terbium
+    66: 162.500,   # Dysprosium
+    67: 164.93033, # Holmium
+    68: 167.259,   # Erbium
+    69: 168.93422, # Thulium
+    70: 173.04,    # Ytterbium
+    71: 174.9668,  # Lutetium
+    72: 178.49,    # Hafnium
+    73: 180.94788, # Tantalum
+    74: 183.84,    # Tungsten
+    75: 186.207,   # Rhenium
+    76: 190.23,    # Osmium
+    77: 192.217,   # Iridium
+    78: 195.084,   # Platinum
+    79: 196.966569,# Gold
+    80: 200.592,   # Mercury
+    81: 204.38,    # Thallium
+    82: 207.2,     # Lead
+    83: 208.98040, # Bismuth
+    84: 209,       # Polonium (most stable isotope)
+    85: 210,       # Astatine (most stable isotope)
+    86: 222,       # Radon (most stable isotope)
+    87: 223,       # Francium (most stable isotope)
+    88: 226,       # Radium (most stable isotope)
+    89: 227,       # Actinium (most stable isotope)
+    90: 232.0377,  # Thorium
+    91: 231.03588, # Protactinium
+    92: 238.02891, # Uranium
+    93: 237,       # Neptunium (most stable isotope)
+    94: 244,       # Plutonium (most stable isotope)
+    95: 243,       # Americium (most stable isotope)
+    96: 247,       # Curium (most stable isotope)
+    97: 247,       # Berkelium (most stable isotope)
+    98: 251,       # Californium (most stable isotope)
+    99: 252,       # Einsteinium (most stable isotope)
+    100: 257,      # Fermium (most stable isotope)
+    101: 258,      # Mendelevium (most stable isotope)
+    102: 259,      # Nobelium (most stable isotope)
+    103: 262,      # Lawrencium (most stable isotope)
+    104: 267,      # Rutherfordium (most stable isotope)
+    105: 270,      # Dubnium (most stable isotope)
+    106: 271,      # Seaborgium (most stable isotope)
+    107: 270,      # Bohrium (most stable isotope)
+    108: 277,      # Hassium (most stable isotope)
+    109: 276,      # Meitnerium (most stable isotope)
+    110: 281,      # Darmstadtium (most stable isotope)
+    111: 282,      # Roentgenium (most stable isotope)
+    112: 285,      # Copernicium (most stable isotope)
+    113: 286,      # Nihonium (most stable isotope)
+    114: 289,      # Flerovium (most stable isotope)
+    115: 290,      # Moscovium (most stable isotope)
+    116: 293,      # Livermorium (most stable isotope)
+    117: 294,      # Tennessine (most stable isotope)
+    118: 294       # Oganesson (most stable isotope)
+}
+
+a2symbol = {
+    1: 'H',     # Hydrogen
+    2: 'He',    # Helium
+    3: 'Li',    # Lithium
+    4: 'Be',    # Beryllium
+    5: 'B',     # Boron
+    6: 'C',     # Carbon
+    7: 'N',     # Nitrogen
+    8: 'O',     # Oxygen
+    9: 'F',     # Fluorine
+    10: 'Ne',   # Neon
+    11: 'Na',   # Sodium
+    12: 'Mg',   # Magnesium
+    13: 'Al',   # Aluminum
+    14: 'Si',   # Silicon
+    15: 'P',    # Phosphorus
+    16: 'S',    # Sulfur
+    17: 'Cl',   # Chlorine
+    18: 'Ar',   # Argon
+    19: 'K',    # Potassium
+    20: 'Ca',   # Calcium
+    21: 'Sc',   # Scandium
+    22: 'Ti',   # Titanium
+    23: 'V',    # Vanadium
+    24: 'Cr',   # Chromium
+    25: 'Mn',   # Manganese
+    26: 'Fe',   # Iron
+    27: 'Co',   # Cobalt
+    28: 'Ni',   # Nickel
+    29: 'Cu',   # Copper
+    30: 'Zn',   # Zinc
+    31: 'Ga',   # Gallium
+    32: 'Ge',   # Germanium
+    33: 'As',   # Arsenic
+    34: 'Se',   # Selenium
+    35: 'Br',   # Bromine
+    36: 'Kr',   # Krypton
+    37: 'Rb',   # Rubidium
+    38: 'Sr',   # Strontium
+    39: 'Y',    # Yttrium
+    40: 'Zr',   # Zirconium
+    41: 'Nb',   # Niobium
+    42: 'Mo',   # Molybdenum
+    43: 'Tc',   # Technetium
+    44: 'Ru',   # Ruthenium
+    45: 'Rh',   # Rhodium
+    46: 'Pd',   # Palladium
+    47: 'Ag',   # Silver
+    48: 'Cd',   # Cadmium
+    49: 'In',   # Indium
+    50: 'Sn',   # Tin
+    51: 'Sb',   # Antimony
+    52: 'Te',   # Tellurium
+    53: 'I',    # Iodine
+    54: 'Xe',   # Xenon
+    55: 'Cs',   # Cesium
+    56: 'Ba',   # Barium
+    57: 'La',   # Lanthanum
+    58: 'Ce',   # Cerium
+    59: 'Pr',   # Praseodymium
+    60: 'Nd',   # Neodymium
+    61: 'Pm',   # Promethium
+    62: 'Sm',   # Samarium
+    63: 'Eu',   # Europium
+    64: 'Gd',   # Gadolinium
+    65: 'Tb',   # Terbium
+    66: 'Dy',   # Dysprosium
+    67: 'Ho',   # Holmium
+    68: 'Er',   # Erbium
+    69: 'Tm',   # Thulium
+    70: 'Yb',   # Ytterbium
+    71: 'Lu',   # Lutetium
+    72: 'Hf',   # Hafnium
+    73: 'Ta',   # Tantalum
+    74: 'W',    # Tungsten
+    75: 'Re',   # Rhenium
+    76: 'Os',   # Osmium
+    77: 'Ir',   # Iridium
+    78: 'Pt',   # Platinum
+    79: 'Au',   # Gold
+    80: 'Hg',   # Mercury
+    81: 'Tl',   # Thallium
+    82: 'Pb',   # Lead
+    83: 'Bi',   # Bismuth
+    84: 'Po',   # Polonium
+    85: 'At',   # Astatine
+    86: 'Rn',   # Radon
+    87: 'Fr',   # Francium
+    88: 'Ra',   # Radium
+    89: 'Ac',   # Actinium
+    90: 'Th',   # Thorium
+    91: 'Pa',   # Protactinium
+    92: 'U',    # Uranium
+    93: 'Np',   # Neptunium
+    94: 'Pu',   # Plutonium
+    95: 'Am',   # Americium
+    96: 'Cm',   # Curium
+    97: 'Bk',   # Berkelium
+    98: 'Cf',   # Californium
+    99: 'Es',   # Einsteinium
+    100: 'Fm',  # Fermium
+    101: 'Md',  # Mendelevium
+    102: 'No',  # Nobelium
+    103: 'Lr',  # Lawrencium
+    104: 'Rf',  # Rutherfordium
+    105: 'Db',  # Dubnium
+    106: 'Sg',  # Seaborgium
+    107: 'Bh',  # Bohrium
+    108: 'Hs',  # Hassium
+    109: 'Mt',  # Meitnerium
+    110: 'Ds',  # Darmstadtium
+    111: 'Rg',  # Roentgenium
+    112: 'Cn',  # Copernicium
+    113: 'Nh',  # Nihonium
+    114: 'Fl',  # Flerovium
+    115: 'Mc',  # Moscovium
+    116: 'Lv',  # Livermorium
+    117: 'Ts',  # Tennessine
+    118: 'Og'   # Oganesson
+}
+
+
+
+
+bohrTA = 0.529177249
+
+
+
+def ReadHess(fchkfile):
+    print(f"reading fchkfle:{fchkfile}")
+    hlist = []
+    alist = []
+    clist = []
+    flag = 0
+    aflag = 0
+    cflag = 0
+    k = 0
+    # fb = open(path + filename, 'r', encoding='utf8')
+    fb = open(fchkfile, 'r', encoding='utf8')
+    for line in fb:
+        if line.find('Cartesian Force Constants') >= 0:
+            flag = 1
+            maxfc = int(line.split()[-1])
+            continue
+        if "Atomic numbers" in line: 
+            aflag = 1
+            maxatom = int(line.split()[-1])
+            Hess = np.zeros([3 * maxatom, 3 * maxatom])
+            continue
+        if "cartesian coordinates" in line:
+            cflag = 1
+            maxcoord = int(line.split()[-1])
+            continue
+        if flag == 1:
+            #line_save = line.split(' ')
+            #line_save = [string.replace('\n', '') for string in line_save]
+            if len(hlist) < maxfc:
+                hlist += line.strip().split()
+            else:
+                flag = 0 
+        if aflag == 1:
+            if len(alist) < maxatom:
+                alist += [int(i) for i in line.split()]
+            else:
+                aflg=0
+        if cflag == 1: 
+            if len(clist) < maxcoord:
+                clist += [float(i) for i in line.split()]
+            else:
+                cflag=0
+    fb.close()
+
+    for i in range(0, 3 * maxatom):
+        for j in range(0, i + 1):
+            Hess[i][j] = hlist[k]
+            k = k + 1
+    Hess = np.where(Hess, Hess, Hess.T)
+    clist = np.array(clist).reshape(-1,3)
+    return Hess,alist,clist
+
+
+def PrintHess(fchkfile):
+    column = 0
+    sum = 0
+    Hess,alist,clist = ReadHess(fchkfile)
+    np.savetxt('Hess.txt', Hess)
+    # fb = open(path + filename.split('.')[0] + '.hess', 'w', encoding='utf8')
+    hessfile=os.path.splitext(fchkfile)[0]+".hess"
+    print("saving orca hess file {:s}".format(hessfile))
+    
+    fb = open(hessfile, 'w', encoding='utf8')
+    fb.write('\n$orca_hessian_file\n\n$act_atom\n  0\n\n$act_coord\n  0\n\n$act_energy\n        0.000000\n\n$hessian\n')
+    fb.write(str(Hess.shape[0]) + '\n')
+    for i in range(0, (Hess.shape[0] * int(Hess.shape[0] / 5 + 1))):
+        column = int(i / Hess.shape[0]) * 5
+        if i % Hess.shape[0] == 0:
+            fb.write((20 - len(str(column))) * ' ' + str(column))
+            fb.write((18 - len(str(column + 1))) * ' ' + str(column + 1))
+            fb.write((18 - len(str(column + 2))) * ' ' + str(column + 2))
+            fb.write((18 - len(str(column + 3))) * ' ' + str(column + 3))
+            fb.write((18 - len(str(column + 4))) * ' ' + str(column + 4))
+            fb.write(8 * ' ' + '\n')
+        for j in range(0, 5):
+            column = int(i / Hess.shape[0]) * 5 + j
+            if sum == Hess.shape[0]*Hess.shape[0]:
+                break
+            if j == 0:
+                fb.write((4 - len(str(i % Hess.shape[0]))) * ' ' + str(i % Hess.shape[0]) + 5 * ' ')
+            if column < Hess.shape[0]:
+                if Hess[i % Hess.shape[0]][column] >= 0:
+                    fb.write(' ')
+                    fb.write(str(Hess[i % Hess.shape[0]][column]))
+                else:
+                    fb.write(str(Hess[i % Hess.shape[0]][column]))
+                fb.write('  ')
+                sum = sum + 1
+            if j == 4:
+                fb.write('\n')
+    Natoms = int(len(alist))
+    SumAtoms = 0
+    fb.write('\n\n')
+    fb.write('$atoms\n')
+    fb.write(str(Natoms)+'\n')
+    for i,a in enumerate(alist):
+        symbol="{:<5s}".format(a2symbol[a])
+        mass="{:12.6f}".format(a2mass[a])
+        coord = "{:20.14f}{:20.14f}{:20.14f}".format(*clist[i]) 
+        fb.write(symbol+mass+coord + "\n")
+    fb.close()
+    return hessfile
+
+
+
+
+def run_command(command):
+    """Run the specified code, then the Bash command if it exists."""
+    # Check if the Bash command exists
+    try:
+        subprocess.run([command.split()[0]], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError:
+        print("Error! command {:s} not exist".format(command.split()[0]))
+        return False
+        
+    try:
+        result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print("Bash command output:\n", result.stdout.decode())
+    except subprocess.CalledProcessError as e:
+        print("Error running bash command:\n", e.stderr.decode())
+
+for fchk in fchkfile:
+    hessfile=PrintHess(fchk)
+    run_command("orca_vib {:s}".format(hessfile))
+
+    

@@ -1,0 +1,39 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法: $(basename "$0") [filename.log]  计算 NMR"
+    echo ""
+    echo "如果提供了文件名，则替换命令中的*.log为指定文件"
+    echo "如果未提供文件名，则对当前目录下的所有*.log文件执行命令"
+    echo ""
+    echo "需要基态优化结构"
+}
+
+# 如果传入了文件模式，则使用该模式，否则使用所有 .log 文件
+file_pattern=$(ls *.log)
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+mkdir -p nmr
+
+qcinp.py -k "revTPSSrevTPSS def2svp NMR=SpinSpin SCRF(Solvent=Chloroform,SMD)" -A "_nmr"  $file_pattern
+
+wait
+
+mv *_nmr.gjf ./nmr
+
+cd nmr
+
+sed -i '/%chk/d' *_nmr.gjf
+
+for inf in $file_pattern; do g16s ${inf/.log/}_nmr.gjf;done
+
+echo "已全部提交任务"

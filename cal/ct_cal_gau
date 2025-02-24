@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo
+    echo "对部分意外中断的任务进行提交。用法: $(basename "$0") [pattern.gjf]"
+    echo
+    echo "如果提供了文件模式，则处理匹配的 .gjf 文件"
+    echo "如果未提供文件模式，则处理当前目录下的所有 .gjf 文件"
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# 如果传入了文件模式，则使用该模式，否则使用所有 .log 文件
+file_pattern="*.gjf"
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+sub_cal() {
+	# 获取输入文件名（不带扩展名）
+	local input_file="$1"
+	local log_file="${input_file/.gjf/.log}"
+
+	# 情况一：如果 'freq' 在输入文件中找到，并且 log 文件中没有两个 'Normal termination of Gaussian'
+	if grep -q "freq" "$input_file"; then
+	  if [ $(grep -c "Normal termination of Gaussian" "$log_file") -lt 2 ]; then
+	    echo "Case 1: Running g16s on $input_file"
+	    g16s "$input_file"
+	  else
+	    echo "Skipping $input_file (already Normal termination of Gaussian)"
+	  fi
+	# 情况二：如果 'freq' 不在输入文件中，并且 log 文件中没有 'Normal termination of Gaussian'
+	elif ! grep -q "freq" "$input_file"; then
+	  if ! grep -q "Normal termination of Gaussian" "$log_file"; then
+	    echo "Case 2: Running g16s on $input_file"
+	    g16s "$input_file"
+	  else
+	    echo "Skipping $input_file (already Normal termination of Gaussian)"
+	  fi
+	fi
+}
+
+for i in $file_pattern ;do
+    sub_cal $i
+done
+
+wait
+
+exit 0
+

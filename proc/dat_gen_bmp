@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.dat] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.dat 文件使用"
+    echo ""
+    echo "将 vrender 生成的 .dat 文件使用 tachyon 生成 png"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="$(ls *.dat)"
+else
+  file_pattern="$1"
+fi
+
+cat <<EOF > my_render.sh
+if [ -n "\$1" ];then NC="-numthreads \$1";fi
+tachyon_cmd=\$(which tachyon_LINUXAMD64)
+if [ -z "\$tachyon_cmd" ];then
+tachyon_cmd=\$(which vmd | sed 's/bin\/vmd/lib\/vmd\/tachyon_LINUXAMD64/')
+fi
+EOF
+
+# 执行转换和移动的函数
+deal_dat() {
+    local ito=$1
+    cat  << EOF >> my_render.sh
+"\$tachyon_cmd" "$1" -format BMP -aasamples 24 -res 6144 3144 -trans_raster3d \$NC -o "${1/.dat/}.bmp"
+EOF
+}
+
+
+# 处理文件
+
+
+for i in $file_pattern ;do
+    deal_dat $i
+done
+
+wait
+
+sh my_render.sh
+
+# 将 bmp 转为 png
+for i in $file_pattern ;do
+    mogrify -trim -format png ${i/.dat/}.bmp
+    wait
+    rm ${i/.dat/}.bmp
+done
+
+
+
+exit 0
+

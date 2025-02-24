@@ -1,0 +1,54 @@
+#!/bin/env python
+
+import os
+import re
+
+# 正则表达式匹配激发态和跃迁偶极矩的模式
+excited_state_pattern = re.compile(r"Excited State\s+(\d+):\s+Singlet-\S+\s+([\d.]+)\s+eV\s+([\d.]+)\s+nm")
+dipole_moment_pattern = re.compile(r"\s*(\d+)\s+([-.\d]+)\s+([-.\d]+)\s+([-.\d]+)\s+([-.\d]+)\s+([-.\d]+)")
+
+def parse_log_file(filename):
+    excited_states = []  # 存储激发态信息的列表
+    dipole_moments = {}  # 存储跃迁偶极矩的字典
+    
+    with open(filename, 'r') as file:
+        lines = file.readlines()
+
+    # 搜索激发态信息
+    for line in lines:
+        # 查找单线态的激发态信息
+        state_match = excited_state_pattern.search(line)
+        if state_match:
+            state_number = int(state_match.group(1))  # 激发态编号
+            energy_ev = float(state_match.group(2))   # 能量（单位：eV）
+            wavelength_nm = float(state_match.group(3))  # 波长（单位：nm）
+            excited_states.append((state_number, energy_ev, wavelength_nm))
+
+        # 查找跃迁偶极矩信息
+        dipole_match = dipole_moment_pattern.match(line)
+        if dipole_match:
+            state_num = int(dipole_match.group(1))  # 状态编号
+            # 提取偶极矩信息：X、Y、Z分量，偶极强度，振子强度
+            x, y, z, dip_strength, osc_strength = map(float, dipole_match.groups()[1:])
+            dipole_moments[state_num] = (x, y, z, dip_strength, osc_strength)
+
+    # 确定第一个单线态的激发态
+    first_singlet = min(excited_states, key=lambda x: x[0], default=None)
+
+    if first_singlet:
+        state_number = first_singlet[0]
+        if state_number in dipole_moments:
+            dipole_info = dipole_moments[state_number]
+            print(f"文件: {filename}")
+            print(f"第一个单线态激发态: 状态 {state_number}")
+            print(f"跃迁偶极矩 (X, Y, Z): {dipole_info[0]:.4f}, {dipole_info[1]:.4f}, {dipole_info[2]:.4f}")
+            print(f"偶极强度: {dipole_info[3]:.4f}, 振子强度: {dipole_info[4]:.4f}\n")
+
+if __name__ == "__main__":
+    # 列出当前目录下所有的 .log 文件
+    log_files = [f for f in os.listdir('.') if f.endswith('.log')]
+
+    # 分析每个 .log 文件
+    for log_file in log_files:
+        parse_log_file(log_file)
+

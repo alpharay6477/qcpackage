@@ -1,0 +1,39 @@
+#!/bin/env python
+
+import math
+import argparse
+
+parser = argparse.ArgumentParser(description="根据 lippert-mataga 公式对于 HLCT 分子计算激发态偶极 (Lippert-Mataga公式) ")
+parser.add_argument('-k',"--kf",required=True,type=float, help="斜率，单位：cm-1。不同溶剂下的 Stokes shift 对溶剂的极化率 Δf 做直线的斜率")
+parser.add_argument('-g',"--mg",required=True,type=float, help="基态偶极矩，单位：Debye。通过 Gaussian 计算得到")
+parser.add_argument('-r',"--radius",required=True,type=float, help="Onsager 腔半径，单位：Å。Multiwfn 计算溶质体积，计算方式：(V/π)^(1/3) + 0.5，其中V是电子密度 0.002 a.u.等值面内包围的以埃^3为单位的分子体积")
+
+# 常量定义
+h = 4.315e-15  # Planck 常数 (eV·s)
+c = 2.998e10   # 光速 (cm/s)
+
+def calculate_mu_e(mu_g, a0, k):
+
+    # 计算 (mu_e - mu_g)^2
+    delta_mu_squared = (k * h * c * a0**3) / 2
+    
+    # 将 delta_mu_squared 从 (C·m)^2 转换为 (Debye)^2
+    delta_mu_squared_debye = delta_mu_squared**0.5 
+    print(f"偶极矩差值为: {delta_mu_squared_debye:.2f}")
+
+    # 计算 mu_e
+    mu_e = delta_mu_squared_debye + mu_g
+
+    return mu_e
+
+# 示例使用
+args = parser.parse_args()
+
+mu_g = args.mg  # ground state dipole moment in Debye
+a0 = args.radius     # Onsager cavity radius in Ångström
+k = args.kf    # slope in cm-1
+
+mu_e = calculate_mu_e(mu_g, a0, k)
+print(f"The excited state dipole moment (μ_e) is: {mu_e:.2f} Debye")
+
+

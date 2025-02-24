@@ -1,0 +1,44 @@
+#!/bin/bash
+
+show_help() {
+    echo ""
+    echo "查看当前文件夹及其子文件夹 Gaussian 计算是否完成"
+    echo ""
+    echo "用法：直接输入 fin_gau"
+    echo ""
+}
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+     show_help
+     exit 0
+fi
+
+# 主文件夹路径
+main_folder=$(pwd)
+
+# 定义颜色
+purple="\033[0;35m"
+red="\033[0;31m"
+nc="\033[0m" # 没有颜色
+
+# 遍历主文件夹及其子文件夹
+find "$main_folder" -type d | while read folder; do
+    log_files=("$folder"/*.log)
+
+    # 检查是否存在.log文件
+    if [ -e "${log_files[0]}" ]; then
+        echo "目录: $folder"
+        grep "Normal termination of Gaussian" "$folder"/*.log | while read -r line; do
+            # 删除路径部分，只保留文件名
+            log_file=$(echo "$line" | sed 's|.*/||')
+            # 将日志文件名打印为紫色，"Normal termination of Gaussian" 部分打印为红色
+            echo -e "${purple}${log_file%%:*}${nc}: ${red}${line#*: }${nc}"
+        done
+
+        if [ -n "$result" ]; then
+            echo "计算未完成"
+        fi
+        echo
+    fi
+done
+

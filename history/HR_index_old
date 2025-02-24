@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# hrindex *.chk
+
+# 计算 H-R-Index，需要基态的*.chl文件，./tdopt/*_freq.chk文件（计算freq）
+
+# 检查是否有参数传入
+if [ $# -eq 0 ]; then
+    echo "转入基态的*.chk文件（opt freq）./tdopt/*_freq.chk文件（计算freq）。"
+    exit 1
+fi
+
+fcc1=$1
+fcc2=$2
+
+# 加载 Intel 环境变量
+source /opt/intel/oneapi/setvars.sh
+wait
+if [ $? -ne 0 ]; then
+    echo "加载 Intel 环境变量失败"
+    exit 1
+fi
+
+# 生成 S0,S1 态的 fcc 文件
+for m in *.fchk; do
+    gen_fcc_state -i $m
+    if [ $? -ne 0 ]; then
+        echo "生成 $m 的 S0,S1 态的 fcc 文件失败"
+        exit 1
+    fi
+done
+
+# 生成偶极子文件
+gen_fcc_dipfile -i ${fcc1}
+if [ $? -ne 0 ]; then
+    echo "生成偶极子文件失败"
+    exit 1
+fi
+wait
+
+# 创建 .inp 文件
+cat <<EOL > fcclasses.inp
+\$\$\$
+PROPERTY     =   EMI  ; OPA/EMI/ECD/CPL/RR/TPA/TPCD/MCD/IC/NRSC
+MODEL        =   AH   ; AS/ASF/AH/VG/VGF/VH
+DIPOLE       =   FC   ; FC/HTi/HTf
+TEMP         =   0.00 ; (temperature in K) 
+;DE           = (read) ; (adiabatic/vertical energy in eV. By default, read from state files) 
+BROADFUN     =   GAU  ; GAU/LOR/VOI
+HWHM         =   0.01 ; (broadening width in eV)
+METHOD       =   TD   ; TI/TD
+;VIBRATIONAL ANALYSIS 
+NORMALMODES  =   COMPUTE   ; COMPUTE/READ/IMPLICIT
+COORDS       =   CARTESIAN ; CARTESIAN/INTERNAL
+;INPUT DATA FILES 
+STATE1_FILE  =   ${fcc1/.fchk/}.fcc    ; 状态 1 的 fcc 文件
+STATE2_FILE  =   ${fcc2/.fchk/}.fcc    ; 状态 2 的 fcc 文件
+ELDIP_FILE   =   eldip_${fcc1/.fchk/}_fchk  ; 状态 1 的 偶极子 文件
+EOL
+
+wait
+
+# 提交计算
+fcclasses3 fcclasses.inp
+

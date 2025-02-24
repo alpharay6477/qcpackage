@@ -1,0 +1,116 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法: $(basename "$0") [filename.fchk] 计算基态的 opt_freq ，激发态的 tdopt_freq"
+    echo "如果提供了文件名，则替换命令中的*.fchk为指定文件"
+    echo "如果未提供文件名，则对当前目录下的所有*.fchk文件执行命令"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+        exit 1
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# 设置全局变量为当前目录和 tdopt 目录的绝对路径
+current_dir=$(pwd)
+tdopt_dir=$(realpath tdopt)
+
+
+# 如果传入了文件名，则使用该文件，否则使用所有 .fchk 文件
+file_pattern="*.fchk"
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+# 检查是否有对应 fchk 文件
+current_dir_fchk_count=$(find ./ -maxdepth 1 -name '*.fchk' | wc -l)
+tdopt_dir_fchk_count=$(find ./tdopt -maxdepth 1 -name '*.fchk' | wc -l)
+
+if [ "$current_dir_fchk_count" -eq 0 ] || [ "$tdopt_dir_fchk_count" -eq 0 ]; then
+    echo "Both ./ and ./tdopt directories must contain at least one .fchk file."
+    exit 1
+fi
+
+if [ "$current_dir_fchk_count" -ne "$tdopt_dir_fchk_count" ]; then
+    echo "The number of .fchk files in ./ and ./tdopt directories must be equal."
+    exit 1
+fi
+
+
+mkdir -p ./orca_fluor
+
+# 生成 hess 矩阵
+for i in *.chk; do formchk $i; done
+wait
+fchk2hess $file_pattern
+mv *.hess ./orca_fluor
+cd $tdopt_dir
+for i in *.chk; do formchk $i; done
+wait
+fchk2hess *.fchk
+wait
+mv *.hess ../orca_fluor/
+wait
+cd $current_dir
+
+# 生成计算的 inp 文件
+
+qcinp.py -P otddh *.log
+wait
+mv *.inp ./orca_fluor
+wait
+
+for input_file in ./orca_fluor/*.inp;
+do
+    if [ -f "$input_file" ]; then
+        output_file="./orca_fluor/$(basename "${input_file%.inp}_fluor.inp")"
+        base_input_file=$(basename "${input_file%.inp}")
+        # 读取输入文件中的原子坐标
+        coords=$(sed -n '/\* xyz 0 1/,/\*/p' "$input_file" | sed '1d;$d')
+
+        # 写入到输出文件
+        cat <<EOF > "$output_file"
+! PBE0 def2-SVP TIGHTSCF CPCM(diphenylether) ESD(FLUOR)
+%TDDFT
+NROOTS 5
+IROOT 1
+END
+%ESD
+GSHESSIAN "${base_input_file%.inp}.hess"
+ESHESSIAN "${base_input_file%.inp}_tdopt.hess"
+DOHT TRUE
+LINES VOIGT
+LINEW 150
+INLINEW 200
+UNIT NM
+SPECRANGE 16666,33333
+DELE 22222
+END
+%pal nprocs 32
+     end
+%MaxCore 2560
+* xyz 0 1
+$coords
+*
+EOF
+
+        echo "Output written to $output_file"
+    fi
+done
+
+# 提交任务
+cd $current_dir/orca_fluor/
+orcas *fluor.inp
+wait
+
+exit 0

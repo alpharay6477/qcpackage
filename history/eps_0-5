@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# 检查是否传入了文件名
+if [ $# -eq 0 ]; then
+  echo "Usage: $0 filename"
+  exit 1
+fi
+
+# 获取传入的文件名
+input_file=$1
+
+# 检查文件是否存在
+if [ ! -f "$input_file" ]; then
+  echo "File not found!"
+  exit 1
+fi
+
+# 循环替换并生成新文件
+for i in $(seq 0.0 0.1 5); do
+  # 格式化文件名
+  formatted_i=$(printf "%.1f" $i)
+  # 生成新文件名
+  output_file="${formatted_i/./}.gjf"
+  # 替换并生成新文件
+  sed -e "s/##/$formatted_i/g" -e "s/\*\*/${formatted_i/./}/g" "$input_file" > "$output_file"
+  echo "Generated $output_file"
+done
+
+echo "All files generated successfully."
+

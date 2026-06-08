@@ -1,0 +1,53 @@
+awk 'BEGIN {
+    printf "%-6s", "T\\S"; 
+    for (s=1; s<=5; s++) printf "%-12s", s; 
+    print ""
+}
+{
+    if($0 ~/<T|HSO|S>/) readf=1
+    if($0 ~/EXCITED STATES \(SINGLETS\)/) {reads=1; getline}
+    if(reads==1 && $0 ~/\*\*\*\*\*\*/) {reads=0}
+    if(reads==1 && $0 ~/STATE/) {gsub(":","",$2); sene[$2]=$6}
+    if($0 ~/EXCITED STATES \(TRIPLETS\)/) {readt=1; getline}
+    if(readt==1 && $0 ~/\*\*\*\*\*\*/) {readt=0}
+    if(readt==1 && $0 ~/STATE/) {gsub(":","",$2); tene[$2]=$6}
+    if(readf==1 && $0 ~/MS=/) {readf=2}
+    if(readf==2 && $0 ~/-----/) {readf=3; getline}
+    if(readf==3 && $0 ~/-----/) {readf=0}
+    if(readf==3 && NF > 2 && $2 > 0) {
+        t=$1; s=$2
+        soc=($4^2 + $6^2 + $8^2 + $10^2 + $12^2 + $14^2)^0.5
+        data_soc[t][s] = soc
+        dest=sene[s]-tene[t]
+        data_dest[t][s] = dest
+        if (t > max_t) max_t = t
+        if (s > max_s) max_s = s
+    }
+}
+END {
+    # 输出 soc(cm-1) 的二维表格
+    print "\nSOC Matrix (cm-1):"
+    printf "%-6s", "T\\S"
+    for (s=1; s<=max_s; s++) printf "%-12s", s
+    print ""
+    for (t=1; t<=max_t; t++) {
+        printf "%-6d", t
+        for (s=1; s<=max_s; s++) {
+            printf "%-12.6f", (t in data_soc && s in data_soc[t]) ? data_soc[t][s] : 0.000000
+        }
+        print ""
+    }
+
+    # 输出 S-T(eV) 的二维表格
+    print "\nS-T Energy Difference (eV):"
+    printf "%-6s", "T\\S"
+    for (s=1; s<=max_s; s++) printf "%-12s", s
+    print ""
+    for (t=1; t<=max_t; t++) {
+        printf "%-6d", t
+        for (s=1; s<=max_s; s++) {
+            printf "%-12.6f", (t in data_dest && s in data_dest[t]) ? data_dest[t][s] : 0.000000
+        }
+        print ""
+    }
+}' $1

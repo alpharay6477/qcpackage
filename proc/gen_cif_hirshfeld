@@ -1,0 +1,88 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.cif] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.cif 文件使用"
+    echo ""
+    echo "生成 晶体 Hirshfeld surface 分析"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*.cif"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_cif() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > ${ito/.cif/}-cif.txt 2>&1
+300
+7
+25
+308
+
+-2
+
+exit
+EOF
+}
+
+
+deal_pdb() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > ${ito/.pdb/}-pdb.txt 2>&1
+12
+1
+5
+$index
+2
+22
+0
+-2
+13
+20
+3
+0
+1
+exit
+EOF
+}
+
+
+
+# 处理文件 Area unit is in Angstrom^2
+
+
+for i in $file_pattern ;do
+    deal_cif $i
+    index=$(awk '/Atoms in the central molecule:/{getline; print}' ${i/.cif/}-cif.txt)
+    deal_pdb ${i/.cif/}.pdb
+    mv surf.cub ${i/.cif/}-surf.cub
+    mv mapfunc.cub ${i/.cif/}-mapfunc.cub
+    mv dislin.pdf ${i/.cif/}-dislin.pdf
+    awk '/Inside element, outside element/,/Area of total contact surface/' ${i/.cif/}-pdb.txt > ${i/.cif/}-area.txt 
+    rm ${i/.cif/}-cif.txt ${i/.cif/}-pdb.txt
+done
+
+wait
+
+exit 0
+

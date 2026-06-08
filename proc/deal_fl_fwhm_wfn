@@ -1,0 +1,55 @@
+#!/bin/env python
+import numpy as np
+import matplotlib.pyplot as plt
+import sys
+import os
+
+def show_help():
+    print("\n用法: deal_fl_fwhm_wfn [file_td.log]")
+#    print("\n如果需要批量处理 [*_reorg_gau.log] 请输入 reorg_gau11")
+    print("")
+
+# 检查命令行参数，如果传入了 -h 或 --help，显示帮助信息并退出
+if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+    show_help()
+    sys.exit(0)
+
+# 读取数据
+data = sys.argv[1]  # 假设文件名为data.txt
+x = data[:, 0]
+y = data[:, 1]
+
+# 归一化Y坐标
+y_normalized = (y - np.min(y)) / (np.max(y) - np.min(y))
+
+# 找到Y=0.5左右的两个X坐标
+y_target = 0.5
+# 找到Y值最接近0.5的点的索引
+idx = np.argmin(np.abs(y_normalized - y_target))
+
+# 找到Y=0.5左右的点
+# 从idx向左找第一个Y<0.5的点
+left_idx = idx
+while left_idx > 0 and y_normalized[left_idx] >= y_target:
+    left_idx -= 1
+
+# 从idx向右找第一个Y<0.5的点
+right_idx = idx
+while right_idx < len(y_normalized) - 1 and y_normalized[right_idx] >= y_target:
+    right_idx += 1
+
+# 计算半峰宽
+fwhm = x[right_idx] - x[left_idx]
+
+print(f"半峰宽 (FWHM) 为: {fwhm}")
+
+# 绘制X-Y曲线
+#plt.plot(x, y_normalized, label='Normalized Y')
+#plt.axhline(y=0.5, color='r', linestyle='--', label='Y=0.5')
+#plt.axvline(x=x[left_idx], color='g', linestyle=':', label=f'X={x[left_idx]:.2f}')
+#plt.axvline(x=x[right_idx], color='g', linestyle=':', label=f'X={x[right_idx]:.2f}')
+#plt.xlabel('X')
+#plt.ylabel('Normalized Y')
+#plt.title(f'X-Y Curve (FWHM = {fwhm:.2f})')
+#plt.legend()
+#plt.show()

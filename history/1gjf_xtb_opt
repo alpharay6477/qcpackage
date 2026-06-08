@@ -1,0 +1,145 @@
+#!/bin/env python
+
+import sys
+import subprocess
+import os
+from shutil import move
+from tempfile import NamedTemporaryFile
+
+def parse_gaussian_input(file_path):
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+    
+    # Find the charge and multiplicity line
+    charge_mult = None
+    coords_start = None
+    coords_end = None
+    coords = []
+    
+    # Parse file structure
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # Check for charge and multiplicity line (two integers)
+        parts = stripped.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            charge_mult = (parts[0], parts[1])
+            coords_start = i + 1
+            continue
+        
+        # If we're in coordinates section
+        if coords_start is not None and i >= coords_start:
+            if not stripped:  # Empty line ends coordinates
+                coords_end = i
+                break
+            
+            parts = stripped.split()
+            if len(parts) >= 4:
+                element = parts[0]
+                try:
+                    x = float(parts[1])
+                    y = float(parts[2])
+                    z = float(parts[3])
+                    coords.append((element, x, y, z))
+                except ValueError:
+                    coords_end = i
+                    break
+    
+    return charge_mult, coords, coords_start, coords_end, lines
+
+
+
+def write_xyz(charge_mult, coords, output_file):
+    with open(output_file, 'w') as f:
+        # Write number of atoms
+        f.write(f"{len(coords)}\n")
+        # Write charge and multiplicity
+        f.write(f"{charge_mult[0]} {charge_mult[1]}\n")
+        # Write coordinates
+        for element, x, y, z in coords:
+            f.write(f"{element}       {x:.8f}     {y:.8f}     {z:.8f}\n")
+
+def run_xtb(output_file, charge, multiplicity):
+    # Calculate UHF value (multiplicity - 1)
+    uhf = int(multiplicity) - 1
+    
+    # Prepare the xtb command
+    xtb_cmd = [
+        "xtb",
+        output_file,
+        "--opt", "tight",
+        "--chrg", charge,
+        "--uhf", str(uhf),
+        "--ceasefiles",
+        "--namespace", os.path.splitext(output_file)[0]
+    ]
+    
+    print("\nRunning xTB calculation with command:")
+    print(" ".join(xtb_cmd))
+    
+    try:
+        # Run the command
+        subprocess.run(xtb_cmd, check=True)
+        print("\nxTB calculation completed successfully!")
+        return f"{input_file.removesuffix('.gjf')}.xtbopt.xyz"
+    except subprocess.CalledProcessError as e:
+        print(f"\nError running xTB: {e}")
+    except FileNotFoundError:
+        print("\nError: xTB executable not found. Please make sure xTB is installed and in your PATH.")
+        return None
+
+def update_gjf_with_opt_coords(gjf_file, original_lines, coords_start, coords_end, opt_xyz_file):
+    # Read optimized coordinates
+    with open(opt_xyz_file, 'r') as f:
+        opt_lines = f.readlines()[2:]  # Skip first two lines
+    
+    # Create temporary file for new gjf
+    with NamedTemporaryFile('w', delete=False) as tmp:
+        # Write header up to coordinates
+        for line in original_lines[:coords_start]:
+            tmp.write(line)
+        
+        # Write optimized coordinates
+        for line in opt_lines:
+            tmp.write(line)
+        
+        # Write remaining parts if any
+        if coords_end is not None:
+            for line in original_lines[coords_end:]:
+                tmp.write(line)
+    
+    # Replace original file
+    move(tmp.name, gjf_file)
+    print(f"\nUpdated {gjf_file} with optimized coordinates")
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        print("Usage: python extract_coords.py <input_file>")
+        sys.exit(1)
+
+    input_file = sys.argv[1]
+    output_file = input_file.removesuffix(".gjf")+ ".xyz"
+    #output_xyz = input_file.removesuffix(".gjf")+ "_temp.xyz"
+
+    charge_mult, coords, coords_start, coords_end, original_lines  = parse_gaussian_input(input_file)
+
+    if charge_mult and coords and coords_start is not None:
+        print(f"Found coordinates starting at line {coords_start + 1}")  # +1 because line numbers typically start at 1
+        print(f"Charge: {charge_mult[0]}, Multiplicity: {charge_mult[1]}")
+        print(f"Number of atoms: {len(coords)}")
+
+        write_xyz(charge_mult, coords, output_file)
+        print(f"Coordinates written to {output_file}")
+
+	# Run xTB calculation
+        opt_xyz_file =run_xtb(output_file, charge_mult[0], charge_mult[1])
+	
+#    if opt_xyz_file and os.path.exists(opt_xyz_file):
+        #  Update original GJF with optimized coordinates
+    update_gjf_with_opt_coords(input_file, original_lines, coords_start, coords_end, opt_xyz_file)
+
+        # Cleanup temporary files
+        #os.remove(os.path.abspath(output_file))
+        #print(f"Removed temporary file {output_file}")
+#    ielse:
+#        print("No coordinates found in the input file")

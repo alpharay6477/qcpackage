@@ -1,0 +1,68 @@
+#!/bin/env python
+import sys
+import math
+import os
+
+def rotate_water_molecule(filename, angle_step=30):
+    # 读取原始文件
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+    
+    header_lines = lines[:18]
+    atom_lines = lines[18:]
+    
+    atoms = []
+    for line in atom_lines:
+        if line.strip():
+            parts = line.split()
+            if len(parts) >= 4:
+                try:
+                    atom_type = parts[0]
+                    x = float(parts[1])
+                    y = float(parts[2])
+                    z = float(parts[3])
+                    atoms.append((atom_type, x, y, z))
+                except:
+                    pass
+    
+    base_name = os.path.splitext(filename)[0]
+    extension = os.path.splitext(filename)[1] or '.xyz'
+    
+    for angle_deg in range(0, 360, angle_step):
+        angle_rad = math.radians(angle_deg)
+        output_filename = f"{base_name}_{angle_deg}{extension}"
+        
+        with open(output_filename, 'w') as f:
+            f.writelines(header_lines)
+            for atom_type, x, y, z in atoms:
+                new_x = x * math.cos(angle_rad) - y * math.sin(angle_rad)
+                new_y = x * math.sin(angle_rad) + y * math.cos(angle_rad)
+                # 使用固定宽度格式，确保负号有足够空间
+                f.write(f"{atom_type:>2s} {new_x:15.8f} {new_y:15.8f} {z:15.8f}\n")
+        
+        print(f"已生成文件: {output_filename}")
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("用法: python script.py filename")
+        print("filename: 包含水分子坐标的文件")
+        sys.exit(1)
+    
+    filename = sys.argv[1]
+    
+    if not os.path.exists(filename):
+        print(f"错误: 文件 '{filename}' 不存在")
+        sys.exit(1)
+    
+    try:
+        rotate_water_molecule(filename)
+        print("所有旋转文件已生成完成！")
+    except Exception as e:
+        print(f"处理过程中发生错误: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

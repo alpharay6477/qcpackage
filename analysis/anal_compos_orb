@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.fchk] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.fchk 文件使用"
+    echo ""
+    echo "分子轨道组成成分分析：对原子进行分解"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*.fchk"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_fchk() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > composite_orb.txt 2>&1
+8
+8
+1
+h-1
+exit
+EOF
+}
+
+
+# 处理文件
+
+
+for i in $file_pattern ;do
+    deal_fchk $i
+    echo "${i/.fchk/}_composite_orb" > ${i/.fchk/}_composite_orb_h1.txt
+    awk '/ Orbital: /,/Orbital delocalization index/' composite_orb.txt >> ${i/.fchk/}_composite_orb_h1.txt
+done
+
+wait
+
+exit 0
+

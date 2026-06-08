@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.fchk] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.fchk 文件使用"
+    echo ""
+    echo "分析分子的 pi 轨道电子占据数目"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*.fchk"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_log() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > ${ito/.fchk/}_p.txt 2>/dev/null
+19
+1
+100
+22
+-1
+0
+2
+0
+7
+5
+1
+q
+q
+EOF
+}
+
+
+# 处理文件
+
+
+for i in $file_pattern ;do
+    deal_log $i
+    awk '/Population of atoms:/, /Total net charge:/' ${i/.fchk/}_p.txt > ${i/.fchk/}_pi.txt
+    rm ${i/.fchk/}_p.txt
+done
+
+wait
+
+exit 0
+

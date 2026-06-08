@@ -1,0 +1,577 @@
+#!/usr/bin/env python3
+"""
+Gaussian片段电荷分析工具
+自动识别分子片段并计算每个片段的NPA电荷总和
+"""
+
+import math
+import re
+import os
+import sys
+import argparse
+from collections import defaultdict, deque
+from pathlib import Path
+
+# ======================
+# 全局常量定义
+# ======================
+COVALENT_RADII = {
+    "H": 0.31, "He": 0.28,
+    "Li": 1.28, "Be": 0.96, "B": 0.84, "C": 0.76, "N": 0.71, "O": 0.66,
+    "F": 0.57, "Ne": 0.58,
+    "Na": 1.66, "Mg": 1.41, "Al": 1.21, "Si": 1.11, "P": 1.07,
+    "S": 1.05, "Cl": 1.02, "Ar": 1.06,
+    "K": 2.03, "Ca": 1.76,
+    "Sc": 1.70, "Ti": 1.60, "V": 1.53, "Cr": 1.39,
+    "Mn": 1.39, "Fe": 1.32, "Co": 1.26, "Ni": 1.24,
+    "Cu": 1.32, "Zn": 1.22,
+    "Br": 1.20, "I": 1.39
+}
+
+BOND_FACTOR = 1.25
+
+# ======================
+# Gaussian输入文件解析
+# ======================
+def parse_gaussian_input(file_path):
+    """
+    解析Gaussian输入文件，提取电荷/多重度和原子坐标
+    """
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = f.readlines()
+
+    charge_mult = None
+    coords = []
+    in_coords = False
+    coord_section_count = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('!'):
+            continue
+
+        parts = stripped.split()
+
+        # 尝试解析电荷和多重度
+        if charge_mult is None and len(parts) == 2:
+            try:
+                charge = int(parts[0])
+                mult = int(parts[1])
+                if mult >= 1:
+                    charge_mult = (charge, mult)
+                    continue
+            except ValueError:
+                pass
+
+        # 跳过可能的路由部分和空白行
+        if stripped.startswith('#') or stripped.startswith('%'):
+            continue
+
+        # 查找坐标部分（通常在电荷/多重度行之后）
+        if charge_mult is not None and not in_coords:
+            # 寻找第一个元素符号开头的行
+            if len(parts) >= 4 and parts[0][0].isalpha():
+                in_coords = True
+                coord_section_count += 1
+            elif len(parts) == 0:
+                continue
+
+        # 收集坐标
+        if in_coords and len(parts) >= 4:
+            # 如果遇到空行或新的非坐标数据，结束坐标收集
+            if len(parts) == 0 or (parts[0][0].isalpha() and len(parts) >= 4):
+                try:
+                    coords.append(
+                        (parts[0],
+                         float(parts[1]),
+                         float(parts[2]),
+                         float(parts[3]))
+                    )
+                except ValueError:
+                    # 可能遇到了连接信息或其他数据
+                    if parts[0][0].isalpha():
+                        continue
+                    else:
+                        break
+            elif parts[0][0].isdigit():
+                # 可能是连接信息，跳过
+                break
+
+    return charge_mult, coords
+
+
+def distance(a, b):
+    """计算两个原子间的距离"""
+    return math.sqrt(
+        (a[1] - b[1]) ** 2 +
+        (a[2] - b[2]) ** 2 +
+        (a[3] - b[3]) ** 2
+    )
+
+
+def build_bond_graph(coords):
+    """基于共价半径构建键连接图"""
+    graph = defaultdict(list)
+    n = len(coords)
+
+    for i in range(n):
+        ri = COVALENT_RADII.get(coords[i][0], 0.77)
+        for j in range(i + 1, n):
+            rj = COVALENT_RADII.get(coords[j][0], 0.77)
+            if distance(coords[i], coords[j]) <= BOND_FACTOR * (ri + rj):
+                graph[i].append(j)
+                graph[j].append(i)
+    return graph
+
+
+def find_fragments(graph, n_atoms):
+    """通过BFS查找所有连接的片段"""
+    visited = [False] * n_atoms
+    fragments = []
+
+    for i in range(n_atoms):
+        if not visited[i]:
+            queue = deque([i])
+            visited[i] = True
+            frag = [i + 1]  # 存储原子序号（从1开始）
+
+            while queue:
+                v = queue.popleft()
+                for nb in graph[v]:
+                    if not visited[nb]:
+                        visited[nb] = True
+                        queue.append(nb)
+                        frag.append(nb + 1)
+
+            fragments.append(sorted(frag))
+
+    return fragments
+
+
+# ======================
+# Log文件解析和NPA数据处理
+# ======================
+def parse_natural_populations(log_file_path):
+    """
+    从log文件中解析Natural Populations数据
+    返回字典：原子序号 -> 电荷值
+    """
+    charge_dict = {}
+    in_npa_section = False
+    npa_start_pattern = re.compile(r"^\s*Summary of Natural Population Analysis:")
+    npa_end_pattern = re.compile(r"^\s*=+\s*$")
+    npa_data_pattern = re.compile(r"^\s*([A-Za-z]+)\s+(\d+)\s+(-?\d+\.\d+)")
+    
+    line_count = 0
+    max_lines = 100000  # 防止文件过大
+    
+    try:
+        with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line_count += 1
+                if line_count > max_lines:
+                    break
+                    
+                # 检查是否进入NPA数据区域
+                if npa_start_pattern.match(line):
+                    in_npa_section = True
+                    continue
+                
+                if in_npa_section:
+                    # 检查是否到达NPA数据结束位置
+                    if npa_end_pattern.match(line) and "Total" not in line:
+                        break
+                    
+                    # 匹配NPA数据行
+                    match = npa_data_pattern.match(line)
+                    if match:
+                        atom_symbol = match.group(1)
+                        atom_number = int(match.group(2))
+                        charge = float(match.group(3))
+                        charge_dict[atom_number] = charge
+    except Exception as e:
+        print(f"  解析log文件时出错: {e}")
+        return {}
+    
+    return charge_dict
+
+
+def find_log_file(gjf_path):
+    """查找与gjf文件对应的log文件"""
+    base_name = Path(gjf_path).stem
+    possible_names = [
+        f"{base_name}.log",
+        f"{base_name}.Log",
+        f"{base_name}.LOG",
+        f"{base_name}.out",
+        f"{base_name}.Out",
+        f"{base_name}.OUT"
+    ]
+    
+    for name in possible_names:
+        log_path = Path(gjf_path).parent / name
+        if log_path.exists():
+            return str(log_path)
+    
+    return None
+
+
+def calculate_fragment_charges(fragments, charge_dict):
+    """
+    计算每个片段的电荷总和
+    """
+    fragment_charges = []
+    
+    for i, frag in enumerate(fragments, 1):
+        total_charge = 0.0
+        atom_charges = []
+        missing_atoms = []
+        
+        for atom_num in frag:
+            if atom_num in charge_dict:
+                atom_charge = charge_dict[atom_num]
+                total_charge += atom_charge
+                atom_charges.append((atom_num, atom_charge))
+            else:
+                missing_atoms.append(atom_num)
+        
+        fragment_charges.append({
+            'fragment_id': i,
+            'atom_indices': frag,
+            'total_charge': total_charge,
+            'atom_charges': atom_charges,
+            'missing_atoms': missing_atoms
+        })
+    
+    return fragment_charges
+
+
+def print_fragment_charges(fragment_charges, file_name=""):
+    """打印片段电荷信息到控制台"""
+    if file_name:
+        print(f"\n{'-'*60}")
+        print(f"文件: {file_name}")
+        print(f"{'-'*60}")
+    
+    print(f"识别到 {len(fragment_charges)} 个片段")
+    
+    for frag_info in fragment_charges:
+        if frag_info['missing_atoms']:
+            print(f"\n[警告] 片段 {frag_info['fragment_id']}: 以下原子在NPA数据中缺失: {frag_info['missing_atoms']}")
+        
+        print(f"片段 {frag_info['fragment_id']}:")
+        print(f"  原子数: {len(frag_info['atom_indices'])}")
+        print(f"  总电荷: {frag_info['total_charge']:10.6f}")
+        print(f"  原子序号: {frag_info['atom_indices'][:10]}", end="")
+        if len(frag_info['atom_indices']) > 10:
+            print(f" ... (共{len(frag_info['atom_indices'])}个原子)")
+        else:
+            print()
+    
+    # 计算并显示总电荷
+    total_charge = sum(f['total_charge'] for f in fragment_charges)
+    print(f"\n所有片段电荷总和: {total_charge:10.6f}")
+    print(f"{'='*60}")
+
+
+def save_results_to_file(gjf_file_path, fragment_charges, charge_dict):
+    """将结果保存到文本文件"""
+    output_file = Path(gjf_file_path).with_suffix(".fragment_charges.txt")
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(f"{'='*60}\n")
+        f.write("片段电荷分析结果\n")
+        f.write(f"{'='*60}\n\n")
+        
+        f.write(f"输入文件: {gjf_file_path}\n")
+        f.write(f"识别到 {len(fragment_charges)} 个片段\n\n")
+        
+        for frag_info in fragment_charges:
+            f.write(f"片段 {frag_info['fragment_id']}:\n")
+            f.write(f"  原子序号: {frag_info['atom_indices']}\n")
+            f.write(f"  原子数量: {len(frag_info['atom_indices'])}\n")
+            f.write(f"  总电荷: {frag_info['total_charge']:.6f}\n")
+            
+            # 详细原子电荷
+            f.write(f"  各原子电荷:\n")
+            for atom_num, charge in frag_info['atom_charges']:
+                f.write(f"    原子 {atom_num:4d}: {charge:10.6f}\n")
+            
+            if frag_info['missing_atoms']:
+                f.write(f"  [警告] 缺失原子: {frag_info['missing_atoms']}\n")
+            
+            f.write("\n")
+        
+        f.write(f"{'='*60}\n")
+        total_fragment_charge = sum(f['total_charge'] for f in fragment_charges)
+        f.write(f"所有片段电荷总和: {total_fragment_charge:.6f}\n")
+        f.write(f"{'='*60}\n")
+    
+    return str(output_file)
+
+
+# ======================
+# 主处理函数
+# ======================
+def process_single_file(gjf_file_path, verbose=False, save_output=True):
+    """
+    处理单个Gaussian输入文件
+    """
+    print(f"\n{'='*60}")
+    print(f"处理文件: {gjf_file_path}")
+    print(f"{'='*60}")
+    
+    # 1. 解析gjf文件
+    if verbose:
+        print("正在解析Gaussian输入文件...")
+    
+    try:
+        charge_mult, coords = parse_gaussian_input(gjf_file_path)
+    except Exception as e:
+        print(f"错误: 解析输入文件失败 - {e}")
+        return None
+    
+    if not coords:
+        print("错误: 无法从输入文件中解析坐标")
+        return None
+    
+    if verbose:
+        print(f"  体系总电荷: {charge_mult[0]}, 自旋多重度: {charge_mult[1]}")
+        print(f"  总原子数: {len(coords)}")
+    
+    # 2. 识别片段
+    if verbose:
+        print("正在识别分子片段...")
+    
+    graph = build_bond_graph(coords)
+    fragments = find_fragments(graph, len(coords))
+    
+    if verbose:
+        print(f"  识别到 {len(fragments)} 个片段")
+    
+    # 3. 查找对应的log文件
+    log_file_path = find_log_file(gjf_file_path)
+    
+    if not log_file_path:
+        print(f"错误: 找不到对应的log文件")
+        print(f"请确保存在与 {Path(gjf_file_path).stem}.* 同名的log或out文件")
+        return None
+    
+    if verbose:
+        print(f"找到log文件: {log_file_path}")
+    
+    # 4. 解析log文件中的Natural Populations数据
+    if verbose:
+        print("正在解析Natural Populations数据...")
+    
+    charge_dict = parse_natural_populations(log_file_path)
+    
+    if not charge_dict:
+        print("错误: 无法从log文件中解析Natural Populations数据")
+        print("请确保log文件包含完整的NPA计算（使用pop=NPA关键词）")
+        return None
+    
+    if verbose:
+        print(f"  成功解析 {len(charge_dict)} 个原子的电荷数据")
+    
+    # 5. 检查原子数是否匹配
+    if len(charge_dict) != len(coords):
+        print(f"警告: NPA数据中的原子数({len(charge_dict)})与输入文件原子数({len(coords)})不匹配")
+    
+    # 6. 计算片段电荷
+    if verbose:
+        print("正在计算片段电荷...")
+    
+    fragment_charges = calculate_fragment_charges(fragments, charge_dict)
+    
+    # 7. 检查是否有缺失原子
+    all_missing = []
+    for frag in fragment_charges:
+        all_missing.extend(frag['missing_atoms'])
+    
+    if all_missing:
+        print(f"警告: 总共 {len(all_missing)} 个原子在NPA数据中缺失")
+    
+    # 8. 输出结果
+    print_fragment_charges(fragment_charges)
+    
+    # 9. 保存结果到文件
+    # output_file = None
+    # if save_output:
+    #    try:
+    #        output_file = save_results_to_file(gjf_file_path, fragment_charges, charge_dict)
+    #        print(f"详细结果已保存到: {output_file}")
+    #    except Exception as e:
+    #        print(f"警告: 保存结果文件失败 - {e}")
+    
+    # print(f"文件处理完成: {Path(gjf_file_path).name}")
+    
+    return fragment_charges
+
+
+def process_directory(directory_path, verbose=False, save_output=True):
+    """
+    处理目录下的所有gjf文件
+    """
+    directory = Path(directory_path)
+    
+    if not directory.exists():
+        print(f"错误: 目录不存在 - {directory_path}")
+        return
+    
+    # 查找所有gjf文件
+    gjf_extensions = ['.gjf', '.GJF', '.com', '.COM', '.inp', '.INP']
+    gjf_files = []
+    
+    for ext in gjf_extensions:
+        gjf_files.extend(directory.glob(f"*{ext}"))
+    
+    if not gjf_files:
+        print(f"在目录 {directory_path} 中未找到Gaussian输入文件")
+        print(f"支持的文件扩展名: {', '.join(gjf_extensions)}")
+        return
+    
+    print(f"\n{'='*60}")
+    print(f"在目录 {directory_path} 中找到 {len(gjf_files)} 个Gaussian输入文件")
+    print(f"{'='*60}")
+    
+    processed_count = 0
+    failed_files = []
+    
+    for gjf_file in sorted(gjf_files):
+        try:
+            result = process_single_file(
+                str(gjf_file),
+                verbose=verbose,
+                save_output=save_output
+            )
+            if result is not None:
+                processed_count += 1
+            else:
+                failed_files.append(gjf_file.name)
+        except KeyboardInterrupt:
+            print("\n用户中断处理")
+            break
+        except Exception as e:
+            print(f"处理文件 {gjf_file.name} 时发生错误: {e}")
+            failed_files.append(gjf_file.name)
+    
+    # 输出总结
+    print(f"\n{'='*60}")
+    print("处理完成!")
+    print(f"{'='*60}")
+    print(f"成功处理: {processed_count}/{len(gjf_files)} 个文件")
+    
+    if failed_files:
+        print(f"失败的文件:")
+        for f in failed_files:
+            print(f"  - {f}")
+
+
+# ======================
+# 命令行接口
+# ======================
+def main():
+    """主函数，处理命令行参数"""
+    parser = argparse.ArgumentParser(
+        description="Gaussian片段电荷分析工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+使用示例:
+  %(prog)s molecule.gjf           # 处理单个文件
+  %(prog)s .                     # 处理当前目录所有gjf文件
+  %(prog)s /path/to/directory    # 处理指定目录
+  %(prog)s -q molecule.gjf       # 安静模式，只显示重要信息
+  %(prog)s --no-save molecule.gjf # 不保存结果文件
+
+注意事项:
+  1. 需要对应的log文件（与gjf文件同名）
+  2. log文件必须包含NPA计算（使用pop=NPA关键词）
+  3. 原子通过共价半径和距离判断成键关系
+  4. 结果文件保存为 .fragment_charges.txt 格式
+        """
+    )
+    
+    parser.add_argument(
+        "input",
+        nargs="?",
+        default=".",
+        help="Gaussian输入文件(.gjf/.com)或目录路径（默认: 当前目录）"
+    )
+    
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="显示详细处理信息"
+    )
+    
+    parser.add_argument(
+        "-q", "--quiet",
+        action="store_true",
+        help="安静模式，只显示最终结果"
+    )
+    
+    parser.add_argument(
+        "--no-save",
+        action="store_true",
+        help="不保存结果文件到磁盘"
+    )
+    
+    parser.add_argument(
+        "-o", "--output",
+        help="指定输出目录（仅目录模式有效）"
+    )
+    
+    parser.add_argument(
+        "--version",
+        action="version",
+        version="Gaussian片段电荷分析工具 v1.0"
+    )
+    
+    args = parser.parse_args()
+    
+    # 设置详细级别
+    verbose = args.verbose
+    if args.quiet:
+        verbose = False
+    
+    # 是否保存输出文件
+    save_output = not args.no_save
+    
+    # 检查输入路径
+    input_path = Path(args.input)
+    
+    if not input_path.exists():
+        print(f"错误: 路径不存在 - {args.input}")
+        sys.exit(1)
+    
+    # 根据输入类型处理
+    if input_path.is_file():
+        # 处理单个文件
+        if input_path.suffix.lower() not in ['.gjf', '.com', '.inp']:
+            print(f"错误: 不支持的文件类型 - {input_path.suffix}")
+            print("请提供.gjf、.com或.inp文件")
+            sys.exit(1)
+        
+        process_single_file(str(input_path), verbose=verbose, save_output=save_output)
+    
+    else:
+        # 处理目录
+        process_directory(str(input_path), verbose=verbose, save_output=save_output)
+
+
+# ======================
+# 程序入口
+# ======================
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n程序被用户中断")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n程序运行时发生错误: {e}")
+        sys.exit(1)
+
+
+

@@ -1,0 +1,30 @@
+#!/bin/env python
+import os
+# 读取原始数据文件
+input_filename = 'Clas_spectrum_Boltzmann_shape.dat'
+output_filename = 'fcc_spec.txt'
+
+with open(input_filename, 'r') as infile, open(output_filename, 'w') as outfile:
+    for line in infile:
+        # 跳过空行
+        if not line.strip():
+            continue
+            
+        # 分割每行的两列数据
+        try:
+            eV, intensity = line.split()
+            eV = float(eV)
+            intensity = float(intensity)
+            
+            # 计算波长(nm): 1240/eV
+            nm = 1240.0 / eV
+            
+            # 只保留200nm-2000nm范围内的数据
+            if 200 <= nm <= 2000:
+                outfile.write(f"{nm:.4f}\t{intensity}\n")
+        except ValueError:
+            # 如果行无法解析，跳过(可能是注释或标题行)
+            continue
+
+print(f"转换完成，结果已保存到 {output_filename}")
+print("只保留了200nm-2000nm范围内的数据")

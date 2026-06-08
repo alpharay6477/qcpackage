@@ -1,0 +1,221 @@
+#!/usr/bin/env python
+
+import sys
+import argparse
+import os
+from rdkit import Chem
+from rdkit.Chem import AllChem
+import subprocess
+import platform
+
+
+def parse_arguments():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description="解析 ChemDraw 复制到剪贴板中 MOL 格式文本")
+    parser.add_argument('filename', type=str, help='设置文件名称')
+    parser.add_argument('-c', '--charge', type=int, default=0, help='体系电荷，默认为0')
+    parser.add_argument('-s', '--spin', type=int, default=1, help='体系自旋多重度，默认为1')
+    return parser.parse_args()
+
+def get_clipboard_content():
+    """获取剪贴板内容并验证（跨平台版本）"""
+    try:
+        system = platform.system()
+        
+        if system == 'Darwin':  # macOS
+            result = subprocess.run(['pbpaste'], capture_output=True, text=True)
+            clipboard_content = result.stdout
+        elif system == 'Windows':  # Windows
+            result = subprocess.run(
+                ['powershell', '-command', 'Get-Clipboard'],
+                capture_output=True,
+                text=True
+            )
+            clipboard_content = result.stdout
+        elif system == 'Linux':  # Linux
+            result = subprocess.run(
+                ['xclip', '-selection', 'clipboard', '-o'],
+                capture_output=True,
+                text=True
+            )
+            clipboard_content = result.stdout
+        else:
+            print(f"错误: 不支持的操作系统 ({system})")
+            sys.exit(1)
+        
+        if not clipboard_content.strip():
+            print("错误: 剪贴板为空或只包含空白字符")
+            sys.exit(1)
+        
+        # 统一换行符（防止混合换行符问题）
+        clipboard_content = clipboard_content.replace('\r\n', '\n')
+        clipboard_content = clipboard_content.replace('\r', '\n')
+        
+        # 检查剪贴板内容是否为ChemDraw复制的MOL格式
+        lines = clipboard_content.strip().split('\n')
+        has_V3000 = any("V3000" in line for line in lines[:5])
+        has_end = any("END" in line for line in lines[-2:])
+        
+        if not (has_V3000 and has_end):
+            print("错误: 剪贴板内容不是 V3000 的 MOL 格式文本")
+            sys.exit(1)
+        
+        return clipboard_content
+        
+    except FileNotFoundError as e:
+        if system == 'Windows':
+            print("错误: PowerShell 不可用，需要 Windows 7 或更高版本")
+        elif system == 'Linux':
+            print("错误: xclip 未安装，请执行: sudo apt install xclip")
+        else:
+            print(f"错误: 剪贴板命令不可用: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"获取剪贴板内容失败: {e}")
+        sys.exit(1)
+
+def process_mol_with_rdkit(molblock, filename):
+    """使用RDKit处理分子结构"""
+    print("使用RDKit处理分子结构...")
+    
+    # 交给 RDKit 解析
+    mol = Chem.MolFromMolBlock(molblock, sanitize=True, removeHs=False)
+    print (mol)
+    if mol is None:
+        # 作为退路再尝试完整内容（有时剪贴板前后带有 comment）
+        mol = Chem.MolFromMolBlock(molblock, sanitize=True, removeHs=False)
+    if mol is None:
+        print("错误: 无法从剪贴板解析 MOL block（RDKit 解析失败）。请确认剪贴板中为 MOL 文本。")
+        sys.exit(1)
+
+    # 加氢并生成 3D 构象
+    mol = Chem.AddHs(mol)
+    params = AllChem.ETKDGv3()
+    params.randomSeed = 42
+    embed_ok = (AllChem.EmbedMolecule(mol, params) == 0)
+    
+    if not embed_ok:
+        # 尝试多次随机种子
+        for s in (0, 1, 7, 42, 123):
+            params.randomSeed = s
+            if AllChem.EmbedMolecule(mol, params) == 0:
+                embed_ok = True
+                break
+    
+    if not embed_ok:
+        print("警告: RDKit 嵌入 3D 构象失败（EmbedMolecule）。将继续，但结果可能不可靠。")
+
+    # RDKit 力场优化：优先 MMFF，其次 UFF
+    if AllChem.MMFFHasAllMoleculeParams(mol):
+        mmff_result = AllChem.MMFFOptimizeMolecule(mol, maxIters=1000)
+        print("使用 MMFF 优化，返回码:", mmff_result)
+    else:
+        uff_result = AllChem.UFFOptimizeMolecule(mol, maxIters=1000)
+        print("使用 UFF 优化，返回码:", uff_result)
+
+    # 写入临时 xyz（xtb 读取）
+    xyz_filename = f"{filename}.xyz"
+    Chem.MolToXYZFile(mol, xyz_filename)
+    
+    print(f"RDKit处理完成，已生成 {xyz_filename}")
+    return xyz_filename
+
+def optimize_with_xtb(xyz_filename, filename, charge, single_ele):
+    """使用xtb进行量子化学优化"""
+    print("开始xtb量子化学优化...")
+    cmd_opt = [
+        "xtb", xyz_filename,
+        "--opt", "tight",
+        "--chrg", str(charge),
+        "--uhf", str(single_ele),
+        "--ceasefiles",
+        "--namespace", filename
+    ]
+    print("执行的命令:", " ".join(cmd_opt))
+    result_opt = subprocess.run(cmd_opt, capture_output=True, text=True)
+    
+    if result_opt.returncode != 0:
+        print(f"错误: xtb 优化失败")
+        print(f"stderr: {result_opt.stderr}")
+        # 检查是否有其他错误信息
+        if "not converged" in result_opt.stderr:
+            print("xtb优化未收敛，但继续处理...")
+        else:
+            sys.exit(1)
+    
+    return result_opt
+
+def create_gaussian_input(filename, charge, spin):
+    """创建Gaussian输入文件"""
+    xtb_filename = f"{filename}.xtbopt.xyz"
+    gjf_filename = f"{filename}.gjf"
+    
+    # 读取生成的gjf文件内容
+    with open(xtb_filename, 'r') as f:
+        gjf_content = f.readlines()
+
+    # 替换前三行
+    new_header = [
+        f"%chk={filename}.chk\n",
+        "%nproc=36\n",
+        "%mem=80GB\n",
+        "#p emp(gd3bj) b3lyp def2svp opt\n",
+        "\n",
+        f"{filename}\n",
+        "\n",
+        f"{charge} {spin}\n"
+    ]
+
+    charge_mult_line_index = 2
+    # 构建新的gjf内容
+    new_gjf_content = new_header + gjf_content[charge_mult_line_index:]
+
+    # 写回文件
+    with open(gjf_filename, 'w') as f:
+        f.writelines(new_gjf_content)
+
+    # 清理临时文件
+    subprocess.run(f'rm -f {xtb_filename} && echo >> {gjf_filename} && echo >> {gjf_filename}', shell=True)
+    
+    print(f"已更新Gaussian输入文件头信息")
+    print(f"处理完成! 生成的文件: {gjf_filename}")
+    
+    return gjf_filename
+
+def main():
+    """主函数"""
+    args = parse_arguments()
+    
+    filename = args.filename
+    charge = args.charge
+    spin = args.spin
+    single_ele = spin - 1
+
+    print(f"分子：{filename} 电荷 {charge} 自旋多重度 {spin} ")
+
+    try:
+        # 获取剪贴板内容
+        molblock = get_clipboard_content()
+        
+        # 使用RDKit处理分子结构
+        xyz_filename = process_mol_with_rdkit(molblock, filename)
+        
+        # 使用xtb进行优化
+        optimize_with_xtb(xyz_filename, filename, charge, single_ele)
+        
+        # 创建Gaussian输入文件
+        gjf_filename = create_gaussian_input(filename, charge, spin)
+
+        # 检查生成的文件
+        if not os.path.exists(gjf_filename):
+            print("错误: 未能生成gjf文件")
+            sys.exit(1)
+
+    except Exception as e:
+        print(f"发生错误: {str(e)}")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+
+

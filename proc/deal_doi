@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.fchk] orbtal_number"
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.fchk 文件使用 生成轨道离域指数"
+    echo ""
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*.fchk"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_fchk() {
+    local ito=$1
+    echo "生成 $1 的 h-l 的离域指数"
+    Multiwfn ${ito} << EOF > ${1/.fchk/}_doi.txt
+8
+1
+h
+l
+exit
+EOF
+}
+
+
+for i in $file_pattern ;do
+    deal_fchk $i
+done
+
+wait
+
+
+exit 0
+

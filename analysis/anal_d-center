@@ -1,0 +1,67 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.fchk] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.fchk 文件使用"
+    echo ""
+    echo "分析过渡金属的 d 带中心（d 轨道中心能级相对于Fermi能级位置）"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*.fchk"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_fchk() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > d-center.txt 2>&1
+10
+-1
+1
+cond
+a
+a
+D
+q
+q
+8
+2
+-15,0,2
+0
+exit
+EOF
+}
+
+
+# 处理文件
+
+
+for i in $file_pattern ;do
+    deal_fchk $i
+    echo "${i/.fchk/}_d-center" > ${i/.fchk/}_d-center.txt
+    awk '/Center of TDOS/,/Note: The vertical dash line corresponds/' d-center.txt >> ${i/.fchk/}_d-center.txt
+    rm d-center.txt
+done
+
+wait
+
+exit 0
+

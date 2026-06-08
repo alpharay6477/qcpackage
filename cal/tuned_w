@@ -1,0 +1,78 @@
+#!/bin/env python
+import os
+import sys
+import re
+
+def float_to_iop_format(w):
+    """把小数格式化成0410400000这种10位数字格式"""
+    formatted = f"{w:.9f}".replace(".", "")[:10]
+    return formatted
+
+def adjust_w_in_file(filename, delta_w):
+    with open(filename, 'r') as f:
+        content = f.read()
+
+    # 查找IOP(3/107=xxxx)和IOP(3/108=xxxx)
+    pattern = r'IOP\(3/107=(\d{10})\)\s*IOP\(3/108=(\d{10})\)'
+    match = re.search(pattern, content)
+
+    if match:
+        old_val1 = match.group(1)
+        old_val2 = match.group(2)
+
+        # 把字符串转成小数
+        w1 = int(old_val1) / 10**9
+        w2 = int(old_val2) / 10**9
+
+        # 简单检查一下两者是否一致
+        if abs(w1 - w2) > 1e-9:
+            print(f"Warning: {filename} 中IOP(3/107)和IOP(3/108)的数值不同，按IOP(3/107)修改。")
+
+        # 调整w
+        new_w = w1 + delta_w
+
+        if new_w < 0 or new_w > 1:
+            print(f"Error: 计算后w={new_w:.9f}超出合理范围(0~1)，跳过{filename}")
+            return
+
+        new_val = float_to_iop_format(new_w)
+
+        # 替换文本
+        new_content = re.sub(
+            pattern,
+            f"IOP(3/107={new_val}) IOP(3/108={new_val})",
+            content
+        )
+
+        # 写回文件
+        with open(filename, 'w') as f:
+            f.write(new_content)
+
+        print(f"{filename} 修改成功：w {w1:.9f} → {new_w:.9f}")
+
+    else:
+        print(f"{filename} 中未找到IOP(3/107=xxxxx) IOP(3/108=xxxxx)，跳过。")
+
+def main():
+    if len(sys.argv) != 2:
+        print("用法: python tuned_w.py 调整量(比如0.005或-0.003)")
+        sys.exit(1)
+
+    try:
+        delta_w = float(sys.argv[1])
+    except ValueError:
+        print("请输入合法的小数！比如 0.005 或 -0.003")
+        sys.exit(1)
+
+    files = [f for f in os.listdir('.') if f.endswith('.gjf')]
+
+    if not files:
+        print("当前目录没有找到任何 .gjf 文件。")
+        sys.exit(1)
+
+    for file in files:
+        adjust_w_in_file(file, delta_w)
+
+if __name__ == "__main__":
+    main()
+

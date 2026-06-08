@@ -1,0 +1,156 @@
+#!/bin/bash
+if [ $# -lt 1 ]; then
+    showhelp
+    exit 1
+fi
+
+function showhelp {
+    echo 'usage : g16s option *.gjf'
+    echo 'e.g.  : g16s -n 32 -e node05 *.gjf'
+    echo 'option: -[n number of cores]'
+    echo '        -[l node name. e.g. -l node1,node2] '
+    echo '        -[e nodename to exclude. e.g. -e node01,node02]'
+    echo '        -[q queue name to submit]'
+    echo '        -[E exclusive mode]'
+    echo '        -[t parameters for using xwtune_gau.py]'
+    echo '        -[p pbs or slurm]'
+    echo '        -[c check gaussian log file: 2-check normal termination, 1-check log file exists]'
+
+}
+while getopts ":n:l:e:c:t:q:p:E" opt
+do
+    case $opt in
+        n) NPROC=$OPTARG;;
+        c) CHECK=$OPTARG;;
+        p) SCHED=$OPTARG;;
+        q) QUEUE=$OPTARG;;
+        e) EXCLUDE=$OPTARG;;
+        l) NODE=$OPTARG;;
+        t) TUNE=$OPTARG;;
+        E) EXCLUSIVE=on;;
+        ?) showhelp 
+        exit 1;;
+    esac
+done
+shift $(($OPTIND - 1))
+
+
+while [[ $# -ge 1 ]]
+do
+dos2unix $1
+workdir=$PWD
+RUN_FLAG=1
+if [ -z "$NPROC" ]; then
+    NPROC=`awk -F '=' /nproc/'{print $2}' $1`
+    if [ -z "$NPROC" ]; then
+        NPROC=16
+        sed -i '1i\%nproc='"$NPROC" $1
+    fi
+else
+    sed -i '/.*nproc.*/d' $1
+    sed -i '1i\%nproc='"$NPROC" $1
+fi
+MEM=`awk -F '=' /mem/'{print $2}' $1`
+if [ -z "$MEM" ]; then
+    MEM=10GB
+    sed -i '1i\%mem='"$MEM" $1
+fi
+
+if [[ "$CHECK" == "2" ]];then
+    NORM_FLAG=`grep  Normal ${1/.gjf/}.log`
+    if [ -n "$NORM_FLAG" ];then
+        RUN_FLAG=0
+    else
+        echo "${1/.gjf/}.log not terminated normally. Submitting..."
+    fi
+fi
+if [[ "$CHECK" == "1" && -f ${1/.gjf/}.log ]];then
+    if [ -f ${1/.gjf/}.log ];then
+        RUN_FLAG=0
+    else
+        echo "${1/.gjf/}.log not exist. Submitting..."
+    fi 
+fi
+if [ -z "$SCHED" ];then
+    SCHED=slurm
+fi
+# check job manage system
+PBS_FLAG=`which qsub 2> /dev/null`
+SLURM_FLAG=`which sbatch 2> /dev/null`
+if [ -n "$SLURM_FLAG" ] && [ "$SCHED" == "slurm" ];then
+    if [[ "$RUN_FLAG" == "1" ]]; then
+        JOB_NAME=${1/.gjf}
+        NAME=sub_${1/.gjf/}.sbatch
+        echo '#!/bin/bash' > $NAME
+        echo "#SBATCH -J $JOB_NAME" >> $NAME
+        echo "#SBATCH -N 1" >> $NAME
+        if [ -n "$QUEUE" ];then
+            echo "#SBATCH --partition=$QUEUE" >> $NAME
+        fi
+        if [ -n "$NODE" ];then
+            echo "#SBATCH -w $NODE" >> $NAME
+        fi
+        if [ -n "$EXCLUDE" ];then
+            echo "#SBATCH --exclude $EXCLUDE" >> $NAME
+        fi
+        if [[ "$EXCLUSIVE" == "on" ]];then
+            echo "#SBATCH --exclusive" >> $NAME
+        fi
+        echo "#SBATCH -n 1" >> $NAME
+        echo "#SBATCH --cpus-per-task=$NPROC" >> $NAME
+        echo "source ~/.bashrc" >> $NAME
+        
+        if [ -n "$TUNE" ];then
+            echo "xwtune_gau.py $TUNE $1" >> $NAME
+        else
+#            echo 'start=$(date +%s.%N)' >> $NAME
+            echo "g16 $1" >> $NAME
+#            echo 'end=$(date +%s.%N)' >> $NAME
+#            echo "optcyc=\$(grep -c 'Done' ${1/.gjf/}.log)" >> $NAME
+#            echo 'runtime=$(printf "%.2f\n" $(echo "scale=2;$end - $start" | bc ))' >> $NAME
+#            echo 'cyctime=$(echo "scale=2;$runtime / $optcyc " | bc )' >> $NAME
+#            echo 'echo "RUN STATS: $runtime seconds; $optcyc cycles; $cyctime second/cycle" > '"${1/.gjf/}.runstats" >> $NAME
+        fi
+	cat <<EOF >> $NAME
+if ! grep -q "\$(date '+%Y-%m-%d')" ~/.end_jobs; then
+    echo "-------------------------------------" >> ~/.end_jobs
+    echo "\$(date '+%Y-%m-%d')" >> ~/.end_jobs
+    echo " TIME              NAME  CPUS WORK_DIR" >> ~/.end_jobs
+fi
+printf "%-6s %16s %5s %-25s\n" "\$(date "+%H:%M")" "$JOB_NAME" "$NPROC" "$workdir" >> ~/.end_jobs
+cal_td_gau ${1/.gjf}.log
+EOF
+        NPROC=''
+        echo "export GAUSS_MEMDEF=10GB" >> $NAME
+        echo "[ -f "${1/.gjf/}.chk" ] && formchk ${1/.gjf/}.chk" >> $NAME
+	sbatch $NAME
+    fi 
+
+elif [ -n "$PBS_FLAG" ] && [ "$SCHED" == "pbs" ];then
+    if [[ "$RUN_FLAG" == "1" ]]; then
+        JOB_NAME=${1/.gjf}
+        NAME=sub_${1/.gjf/}.pbs
+        echo "#PBS -S /bin/bash" > $NAME
+        if [ -n "$NODE" ];then
+            echo "#PBS -l nodes=$NODE:ppn=$NPROC" >> $NAME
+        else
+            echo "#PBS -l nodes=1:ppn=$NPROC" >> $NAME
+        fi
+        echo "#PBS -N $JOB_NAME" >> $NAME
+        echo "#PBS -j oe" >> $NAME
+        echo 'cd $PBS_O_WORKDIR' >> $NAME
+        echo 'source $g16root/g16/bsd/g16.profile' >> $NAME
+        echo 'export PATH=~/anaconda2/bin:$PATH' >> $NAME
+        if [ -n "$TUNE" ];then
+            echo "xwtune_gau.py $TUNE $1" >> $NAME
+        else
+            echo "g16 $1" >> $NAME
+ 	    echo "export GAUSS_MEMDEF=10GB" >> $NAME
+            echo "[ -f "${1/.gjf/}.chk" ] && formchk ${1/.gjf/}.chk" >> $NAME
+        fi
+        qsub $NAME
+    fi
+fi
+
+shift 1
+done 

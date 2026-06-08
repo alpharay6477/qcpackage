@@ -1,0 +1,224 @@
+#!/bin/bash
+
+# 检查参数
+if [ $# -lt 1 ]; then
+    echo "用法: $0 <out文件>"
+    exit 1
+fi
+
+outfile="$1"
+
+if [ ! -f "$outfile" ]; then
+    echo "错误: 文件 '$outfile' 不存在"
+    exit 1
+fi
+
+echo "========================================="
+echo "SOC混合前 - 单线态电偶极矩: 波长nm, D2, DX, DY, DZ (a.u.)"
+echo "========================================="
+awk '
+/ABSORPTION SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/ {
+    found=1
+    next
+}
+found && /ABSORPTION SPECTRUM VIA TRANSITION VELOCITY DIPOLE MOMENTS/ {
+    exit
+}
+# 精确匹配单线态跃迁格式：-> 数字-1字母（如-> 1-1A、-> 2-1B）
+found && /^[[:space:]]*[0-9]/ && /->[[:space:]]*[0-9]+-1[A-Za-z]/ {
+    transition = $1 " " $2 " " $3
+    wavelength = $6
+    d2 = $(NF-3)
+    dx = $(NF-2)
+    dy = $(NF-1)
+    dz = $NF
+    printf "%-18s %8.1f %10.4f %10.4f %10.4f %10.4f\n", transition, wavelength, d2, dx, dy, dz
+}
+' "$outfile"
+
+echo ""
+echo "========================================="
+echo "SOC混合前 - 单线态磁偶极矩: 波长nm, R(10^-40), MX, MY, MZ (a.u.)"
+echo "========================================="
+awk '
+/CD SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/ {
+    found=1
+    next
+}
+found && /CD SPECTRUM VIA TRANSITION VELOCITY DIPOLE MOMENTS/ {
+    exit
+}
+# 精确匹配单线态跃迁格式：-> 数字-1字母
+found && /^[[:space:]]*[0-9]/ && /->[[:space:]]*[0-9]+-1[A-Za-z]/ {
+    transition = $1 " " $2 " " $3
+    wavelength = $6
+    r = $(NF-3)
+    mx = $(NF-2)
+    my = $(NF-1)
+    mz = $NF
+    printf "%-18s %8.1f %10.4f %10.4f %10.4f %10.4f\n", transition, wavelength, r, mx, my, mz
+}
+' "$outfile"
+
+echo ""
+echo "========================================="
+echo "SOC混合前 - 单线态g因子: 波长nm, R, |μ|^2, |m|^2, D, g=4*R/D"
+echo "========================================="
+awk '
+# 读取电偶极矩数据
+/ABSORPTION SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/ {
+    found_ed=1; next
+}
+found_ed && /ABSORPTION SPECTRUM VIA TRANSITION VELOCITY DIPOLE MOMENTS/ { exit }
+found_ed && /^[[:space:]]*[0-9]/ && /->[[:space:]]*[0-9]+-1[A-Za-z]/ {
+    key = $4
+    t[key] = $1 " " $2 " " $3
+    wl[key] = $6
+    d2[key] = $(NF-3)  # 这是平方和
+    # 保存处理顺序
+    order[++n] = key
+}
+END {
+    # 读取磁偶极矩数据
+    while (getline < "'"$outfile"'" > 0) {
+        if (/CD SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/) {
+            found_md=1; continue
+        }
+        if (found_md && /CD SPECTRUM VIA TRANSITION VELOCITY DIPOLE MOMENTS/) break
+        if (found_md && /^[[:space:]]*[0-9]/ && /->[[:space:]]*[0-9]+-1[A-Za-z]/) {
+            key = $4
+            r[key] = $(NF-3)
+            mx[key] = $(NF-2)
+            my[key] = $(NF-1)
+            mz[key] = $NF
+        }
+    }
+
+    # 计算并输出g因子
+    print " |μ|(e-18) esu cm  1 a.u. = 2.5412 Debye = 2.5412×10−18 esu cm   |m|(e-20) erg/G   1 a.u. = 1.8548×10−23J/T = 1.8548×10−20 erg G−1 "
+    printf "%-18s %8s %10s %10s %10s %10s %10s\n", "Transition", "WL(nm)", "|μ|(e-18)", "|m|(e-20)","R(e-40)", "D(e-40)", "g"
+    printf "%-18s %8s %10s %10s %10s %10s %10s\n", "------------------", "--------", "----------", "----------", "----------", "----------", "----------"
+    
+    # 按照读取顺序输出
+    for (i = 1; i <= n; i++) {
+        key = order[i]
+        if (key in r) {
+            mu_au = sqrt(d2[key]) * 2.5412
+            mu2 = d2[key] * 254.12 * 254.12  # 电偶极矩平方和，加单位换算
+            m2_au = mx[key]*mx[key] + my[key]*my[key] + mz[key]*mz[key]
+            m_au = sqrt(m2_au) * 1.8548
+            m2 = mx[key]*mx[key]*1.8548*1.8548 + my[key]*my[key]*1.8548*1.8548 + mz[key]*mz[key]*1.8548*1.8548
+            D = mu2 + m2
+            D_au = mu_au*mu_au*100 + m_au*m_au
+            if (D > 0) {
+                g = 4 * r[key] / D
+                printf "%-18s %8.1f %10.4f %10.4f %10.4f %10.2f %10.4f\n", t[key], wl[key], mu_au, m_au, r[key], D, g
+            }
+        }
+    }
+}
+' "$outfile"
+
+echo ""
+echo "========================================="
+echo "SOC混合后 - 跃迁电偶极矩: 波长nm, D2, |DX|, |DY|, |DZ| (a.u.)"
+echo "========================================="
+awk '
+/SOC CORRECTED ABSORPTION SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/ {
+    found=1
+    next
+}
+found && /SOC CORRECTED ABSORPTION SPECTRUM VIA TRANSITION VELOCITY DIPOLE MOMENTS/ {
+    exit
+}
+found && /^[[:space:]]*[0-9]/ && /->/ {
+    transition = $1 " " $2 " " $3
+    wavelength = $6
+    d2 = $(NF-3)
+    dx = $(NF-2)
+    dy = $(NF-1)
+    dz = $NF
+    printf "%-18s %8.1f %10.4f %10.4f %10.4f %10.4f\n", transition, wavelength, d2, dx, dy, dz
+}
+' "$outfile"
+
+echo ""
+echo "========================================="
+echo "SOC混合后 - 跃迁磁偶极矩: 波长, R(10^-40), |MX|, |MY|, |MZ| (a.u.)"
+echo "========================================="
+awk '
+/SOC CORRECTED CD SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/ {
+    found=1
+    next
+}
+found && /SOC CORRECTED CD SPECTRUM VIA TRANSITION VELOCITY DIPOLE MOMENTS/ {
+    exit
+}
+found && /^[[:space:]]*[0-9]/ && /->/ {
+    transition = $1 " " $2 " " $3
+    wavelength = $6
+    r = $(NF-3)
+    mx = $(NF-2)
+    my = $(NF-1)
+    mz = $NF
+    printf "%-18s %8.1f %10.4f %10.4f %10.4f %10.4f\n", transition, wavelength, r, mx, my, mz
+}
+' "$outfile"
+
+echo ""
+echo "========================================="
+echo "SOC混合后 - 跃迁g因子: 波长nm, R, |μ|^2, |m|^2, D, g=4*R/D"
+echo "========================================="
+awk '
+# 读取电偶极矩数据
+/SOC CORRECTED ABSORPTION SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/ {
+    found_ed=1; next
+}
+found_ed && /SOC CORRECTED ABSORPTION SPECTRUM VIA TRANSITION VELOCITY DIPOLE MOMENTS/ { exit }
+found_ed && /^[[:space:]]*[0-9]/ && /->/ {
+    key = $4
+    t[key] = $1 " " $2 " " $3
+    wl[key] = $6
+    d2[key] = $(NF-3)  # 平方和
+    # 保存处理顺序
+    order[++n] = key
+}
+END {
+    # 读取磁偶极矩数据
+    while (getline < "'"$outfile"'" > 0) {
+        if (/SOC CORRECTED CD SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS/) {
+            found_md=1; continue
+        }
+        if (found_md && /SOC CORRECTED CD SPECTRUM VIA TRANSITION VELOCITY DIPOLE MOMENTS/) break
+        if (found_md && /^[[:space:]]*[0-9]/ && /->/) {
+            key = $4
+            r[key] = $(NF-3)
+            mx[key] = $(NF-2)
+            my[key] = $(NF-1)
+            mz[key] = $NF
+        }
+    }
+    # 计算并输出g因子
+    print " |μ|(e-18) esu cm  1 a.u. = 2.5412 Debye = 2.5412×10−18 esu cm   |m|(e-20) erg/G   1 a.u. = 1.8548×10−23J/T = 1.8548×10−20 erg G−1"
+    printf "%-18s %8s %10s %10s %10s %10s %10s\n", "Transition", "WL(nm)", "|μ|(e-18)", "|m|(e-20)","R(e-40)", "D(e-40)", "g"
+    printf "%-18s %8s %10s %10s %10s %10s %10s\n", "------------------", "--------", "----------", "----------", "----------", "----------", "----------"
+    
+    # 按照读取顺序输出
+    for (i = 1; i <= n; i++) {
+        key = order[i]
+        if (key in r) {
+            mu_au = sqrt(d2[key]) * 2.5412
+            mu2 = d2[key] * 254.12 * 254.12  # 电偶极矩平方和，加单位换算 1 a.u. = 2.5412 Debye = 2.5412×10−18 esu cm
+            m2_au = mx[key]*mx[key] + my[key]*my[key] + mz[key]*mz[key]
+            m_au = sqrt(m2_au) * 1.8548
+            m2 = mx[key]*mx[key]*1.8548*1.8548 + my[key]*my[key]*1.8548*1.8548 + mz[key]*mz[key]*1.8548*1.8548  # 磁偶极矩平方和，加单位换算 1 a.u. = 1.8548×10−23J/T = 1.8548×10−20 erg G−1
+            D = mu2 + m2
+            D_au = mu_au*mu_au*100 + m_au*m_au
+            if (D > 0) {
+                g = 4 * r[key] / D   # r[key] 为10^40倍
+                printf "%-18s %8.1f %10.4f %10.4f %10.4f %10.2f %10.4f\n", t[key], wl[key], mu_au, m_au, r[key], D, g
+            }
+        }
+    }
+}
+' "$outfile"

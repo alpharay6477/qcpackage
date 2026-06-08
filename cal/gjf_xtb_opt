@@ -1,0 +1,243 @@
+#!/bin/env python
+
+import sys
+import subprocess
+import os
+import glob
+from shutil import move
+from tempfile import NamedTemporaryFile
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
+import shutil
+
+def parse_gaussian_input(file_path):
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+
+    charge_mult = None
+    coords_start = None
+    coords_end = None
+    coords = []
+    in_coords_section = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # 跳过空行和注释行
+        if not stripped or stripped.startswith('!'):
+            if in_coords_section:
+                coords_end = i
+                break
+            continue
+            
+        parts = stripped.split()
+
+        # 检查电荷和多重度行（只在还没找到时检查）
+        if charge_mult is None and len(parts) == 2:
+            try:
+                charge = int(parts[0])
+                mult = int(parts[1])
+                # 多重度必须至少为1
+                if mult >= 1:
+                    charge_mult = (str(charge), str(mult))
+                    coords_start = i + 1
+                    in_coords_section = True
+                    continue
+            except ValueError:
+                pass  # 不是有效的整数
+
+        # 如果在坐标区域，解析坐标
+        if in_coords_section:
+            # 检查是否是坐标行（第一个是元素符号，后面三个是数字）
+            if len(parts) >= 4:
+                element = parts[0]
+                # 检查元素符号是否合理（字母开头）
+                if element[0].isalpha():
+                    try:
+                        x = float(parts[1])
+                        y = float(parts[2])
+                        z = float(parts[3])
+                        coords.append((element, x, y, z))
+                        continue
+                    except ValueError:
+                        pass  # 不是有效的坐标数字
+            
+            # 如果到达这里，说明不是有效的坐标行，结束坐标区域
+            coords_end = i
+            break
+
+    return charge_mult, coords, coords_start, coords_end, lines
+
+def write_xyz(charge_mult, coords, output_file):
+    with open(output_file, 'w') as f:
+        # Write number of atoms
+        f.write(f"{len(coords)}\n")
+        # Write charge and multiplicity
+        f.write(f"{charge_mult[0]} {charge_mult[1]}\n")
+        # Write coordinates
+        for element, x, y, z in coords:
+            f.write(f"{element}       {x:.6f}     {y:.6f}     {z:.6f}\n")
+
+def run_xtb(output_file, charge, multiplicity):
+    # Calculate UHF value (multiplicity - 1)
+    uhf = int(multiplicity) - 1
+
+    # Prepare the xtb command
+    xtb_cmd = [
+        "xtb",
+        output_file,
+        "--opt", "tight",
+        "--chrg", charge,
+        "--uhf", str(uhf),
+        "--ceasefiles",
+#        "--alpb", "water",
+        "--namespace", os.path.splitext(output_file)[0]
+    ]
+
+    print("\nRunning xTB calculation with command:")
+    print(" ".join(xtb_cmd))
+
+    try:
+        # Run the command and suppress all output
+        subprocess.run(xtb_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("\nxTB calculation completed successfully!")
+        return f"{os.path.splitext(output_file)[0]}.xtbopt.xyz"
+    except subprocess.CalledProcessError as e:
+        print(f"\nError running xTB: {e}")
+        return None
+    except FileNotFoundError:
+        print("\nError: xTB executable not found. Please make sure xTB is installed and in your PATH.")
+        return None
+
+def update_gjf_with_opt_coords(gjf_file, original_lines, coords_start, coords_end, opt_xyz_file):
+    # Read optimized coordinates
+    with open(opt_xyz_file, 'r') as f:
+        opt_lines = f.readlines()[2:]  # Skip first two lines
+
+    # Create temporary file for new gjf
+    with NamedTemporaryFile('w', delete=False) as tmp:
+        # Write header up to coordinates
+        for line in original_lines[:coords_start]:
+            tmp.write(line)
+
+        # Write optimized coordinates
+        for line in opt_lines:
+            tmp.write(line)
+
+        # Write remaining parts if any
+        if coords_end is not None:
+            for line in original_lines[coords_end:]:
+                tmp.write(line)
+
+    # Replace original file
+    move(tmp.name, gjf_file)
+    print(f"\nUpdated {gjf_file} with optimized coordinates")
+
+def process_single_gjf(input_file):
+    """处理单个GJF文件的函数"""
+    print(f"\n{'='*60}")
+    print(f"Processing: {input_file}")
+    print(f"{'='*60}")
+    
+    output_file = input_file.removesuffix(".gjf") + ".xyz"
+
+    charge_mult, coords, coords_start, coords_end, original_lines = parse_gaussian_input(input_file)
+
+    if charge_mult and coords and coords_start is not None:
+        print(f"Found coordinates starting at line {coords_start + 1}")
+        print(f"Charge: {charge_mult[0]}, Multiplicity: {charge_mult[1]}")
+        print(f"Number of atoms: {len(coords)}")
+
+        write_xyz(charge_mult, coords, output_file)
+        print(f"Coordinates written to {output_file}")
+
+        # Run xTB calculation
+        opt_xyz_file = run_xtb(output_file, charge_mult[0], charge_mult[1])
+
+        if opt_xyz_file and os.path.exists(opt_xyz_file):
+            # Update original GJF with optimized coordinates
+            update_gjf_with_opt_coords(input_file, original_lines, coords_start, coords_end, opt_xyz_file)
+            print(f"Successfully processed: {input_file}")
+            return True
+        else:
+            print(f"xTB optimization failed for: {input_file}")
+            return False
+    else:
+        print(f"No coordinates found in: {input_file}")
+        print(f"Debug: charge_mult={charge_mult}, coords={len(coords) if coords else 0}, coords_start={coords_start}")
+        return False
+
+if __name__ == "__main__":
+    # 获取gjf文件列表
+    if len(sys.argv) > 1 and sys.argv[1].strip():
+        # 处理传入的参数（可能是单个文件、多个文件或通配符）
+        input_arg = sys.argv[1]
+        
+        # 使用glob匹配文件（支持通配符）
+        matched_files = glob.glob(input_arg)
+        
+        if matched_files:
+            gjf_files = matched_files
+        else:
+            # 如果没有匹配到文件，检查是否是单个具体的文件名
+            if os.path.exists(input_arg):
+                gjf_files = [input_arg]
+            else:
+                print(f"Error: No files found matching '{input_arg}'")
+                sys.exit(1)
+    else:
+        # 没有参数，默认获取当前目录所有.gjf文件
+        gjf_files = glob.glob("*.gjf")
+
+    # 确保只处理.gjf文件（过滤非gjf文件）
+    gjf_files = [f for f in gjf_files if f.endswith('.gjf')]
+    
+    if not gjf_files:
+        print("No .gjf files found!")
+        sys.exit(1)
+
+    print(f"Found {len(gjf_files)} .gjf files: {[os.path.basename(f) for f in gjf_files]}")
+
+    for gjf_file in gjf_files:
+        backup_file = gjf_file + 'bak'  # 生成 .gjfbak 文件名
+        shutil.copy2(gjf_file, backup_file)  # 复制文件（保留元数据）
+
+    # 设置并行进程数（根据CPU核心数调整）
+    max_workers = min(multiprocessing.cpu_count(), len(gjf_files))
+    print(f"Running with {max_workers} parallel processes")
+
+    success_count = 0
+    failure_count = 0
+
+    # 使用进程池并行处理
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务
+        future_to_file = {
+            executor.submit(process_single_gjf, gjf_file): gjf_file
+            for gjf_file in gjf_files
+        }
+
+        # 等待所有任务完成并收集结果
+        for future in as_completed(future_to_file):
+            gjf_file = future_to_file[future]
+            try:
+                result = future.result()
+                if result:
+                    success_count += 1
+                    print(f"Successfully processed: {gjf_file}")
+                else:
+                    failure_count += 1
+                    print(f"Failed to process: {gjf_file}")
+            except Exception as e:
+                print(f"Error processing {gjf_file}: {e}")
+                failure_count += 1
+
+
+    # 输出总结
+    print(f"\n{'='*60}")
+    print("Processing Summary:")
+    print(f"{'='*60}")
+    print(f"Total files processed: {len(gjf_files)}")
+    print(f"Successful: {success_count}")
+    print(f"Failed: {failure_count}")
+    print(f"{'='*60}")

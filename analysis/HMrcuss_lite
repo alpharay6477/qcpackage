@@ -1,0 +1,62 @@
+#!/bin/env python
+import numpy as np
+import argparse
+import math
+
+parser = argparse.ArgumentParser(description="需要计算SOC、ΔE(st)、T 默认为 298.15 K、")
+parser.add_argument('-s',"--NAC",required=True,type=float, help="SOC/NAC：cm-1")
+parser.add_argument('-e',"--delta",required=True,type=float, help="ΔEst/ΔG：eV")
+parser.add_argument('-l',"--lamda",nargs='?',default=0.16,type=float, help="重组能：eV 默认0.16 eV")
+parser.add_argument('-t',"--T",nargs='?',default=298.15,type=float, help="温度：K 默认 298.15")
+
+args = parser.parse_args()
+
+# 将文件名分别赋值给不同的变量
+NAC_cm = args.NAC   # 变量 1 SOC
+ΔG = args.delta     # 变量 2 ΔEst
+T = args.T          # 变量 3 温度
+λM = args.lamda
+
+# 计算 krisc 方程
+
+def marcus_rate(NAC,NAC_cm, λM, ΔG, T):
+    """
+    计算 Marcus 速率常数
+    参数:
+    NAC (eV): 非绝热耦合
+    λM (eV): 重组能量
+    ΔG (eV): 自由能变化
+    T (K): 温度
+
+    返回:
+    kT_Marcus (s^-1): Marcus 速率常数
+    """
+    # 常量
+    h = 4.135667696e-15  # eV·s (普朗克常数)
+    kb = 8.617333262145e-5  # eV/K (玻尔兹曼常数)
+    ħ = h / (2 * np.pi)  # eV·s (约化普朗克常数)
+    
+    # 计算 Marcus 速率常数
+    factor1 = (np.pi / ħ) * (NAC**2)
+    factor2 = 1 / np.sqrt(np.pi * λM * kb * T)
+
+    exponent = -((ΔG + λM) ** 2) / (4 * λM * kb * T)
+    factor3 =  np.exp(exponent)
+    
+    kT_Marcus = factor1 * factor2 * factor3
+    print(f"方程项1: {factor1}\n方程项2: {factor2}") 
+    print(f"低阶方程项3: {factor3}") 
+    # print(factor2) 
+    # print(sum_term) 
+    return kT_Marcus
+
+NAC = NAC_cm*1.239841E-4  # SOC / eV
+
+print(f'SOC_eV: {NAC}')
+print(f"λM_eV: {λM}")
+print(f"ΔG_eV: {ΔG}")
+print(f"T: {T}\n")
+
+# 计算 Marcus 速率常数
+rate_constant = marcus_rate(NAC,NAC_cm,λM, ΔG,T)
+print(f"Marcus 速率常数: {rate_constant:.4e} s^-1")

@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo
+    echo "用法: $(basename "$0") [filename.gjf] （当前文件夹）"
+    echo
+    echo "如果提供了文件名，则替换命令中的*.gjf为指定文件"
+    echo "如果未提供文件名，则对当前目录下的所有*.gjf文件执行命令"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+        exit 1
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+
+# 如果传入了文件名，则使用该文件，否则使用所有 .gjf 文件
+file_pattern="*.gjf"
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+# 执行第一个命令并检查错误
+echo "执行: qcinp.py -P opt ${file_pattern}"
+qcinp.py -k "opt upbe1pbe/def2svp emp(gd3bj) g09default scf(maxcycle=64) scrf(solvent=diphenylether) freq" ${file_pattern}
+wait
+
+sed -i '8c\0 2' *.gjf
+
+# 执行第三个命令并检查错误
+echo "执行: g16s ${file_pattern}"
+g16s ${file_pattern}
+check_error "g16s ${file_pattern}"
+
+echo "所有命令执行完毕"
+

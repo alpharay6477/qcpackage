@@ -1,0 +1,43 @@
+#!/bin/env python
+import sys
+import glob
+
+def process_text_file(file_pathi,funct):
+    # 读取文件内容
+    with open(file_path, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+    
+    # 找到最后一个非空行的行号
+    last_non_empty = -1
+    for i, line in enumerate(lines):
+        if line.strip():  # 如果不是空行
+            last_non_empty = i
+    
+    # 如果文件全是空行，则不做任何处理
+    if last_non_empty == -1:
+        print("文件全是空行，不做处理")
+        return
+    
+    # 截取到最后一个非空行，并添加新内容
+    if funct == 'opt': 
+        new_lines = lines[:last_non_empty+1] + ['\n', '@/mnt/masvp/N\n', '\n', '\n', '\n']
+    elif funct == 'sp':
+        new_lines = lines[:last_non_empty+1] + ['\n', '@/mnt/matzvp/N\n', '\n', '\n', '\n', '\n']
+    else:
+        print("无效的功能参数，请输入'opt'或'sp'")
+        sys.exit(1)
+    # 写回文件
+    
+    with open(file_path, 'w', encoding='utf-8') as file:
+        file.writelines(new_lines)
+
+# 使用示例
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("用法: gjf_add <文件路径> <功能(opt/sp)>, 追加计算参数到 gjf 文件")
+        sys.exit(1)
+    file_path = sys.argv[1]
+    funct = sys.argv[2] if len(sys.argv) >= 3 else "opt"
+    #file_path = input("请输入要处理的文件路径: ")
+    process_text_file(file_path,funct)
+    print("文件处理完成")

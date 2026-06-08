@@ -1,0 +1,86 @@
+#!/bin/env python
+import re
+import sys
+import os
+
+def cm_to_nm(wavenumber_cm):
+    """将波数(cm^-1)转换为波长(nm)"""
+    return 1e7 / wavenumber_cm if wavenumber_cm != 0 else 0
+
+def process_log_file(file_path):
+    """处理log文件，提取信息并生成表格"""
+    # 初始化变量
+    zero_zero_energy = 0.0
+    zero_zero_energy_nm = 0.0
+    transitions = []
+    
+    # 读取文件
+    with open(file_path, 'r', encoding='utf-8') as file:
+        content = file.read()
+    
+    # 提取0-0 transition能量
+    zero_zero_match = re.search(r'Energy of the 0-0 transition:\s*([\d.]+)\s*cm\^\(-1\)', content)
+    if zero_zero_match:
+        zero_zero_energy = float(zero_zero_match.group(1))
+        zero_zero_energy_nm = cm_to_nm(zero_zero_energy)
+    
+    # 提取所有transition信息
+    transition_matches = re.finditer(
+        r'Energy =\s*([-\d.]+)\s*cm\^-1:\s*\|([^>]+)>\s*->\s*\|([^>]+)>.*?Intensity =\s*([\d.E+-]+).*?DipStr =\s*([\d.E+-]+)',
+        content,
+        re.DOTALL
+    )
+    
+    for match in transition_matches:
+        energy_relative = float(match.group(1))
+        initial_state = match.group(2)
+        final_state = match.group(3)
+        intensity = match.group(4)
+        dip_str = match.group(5)
+        
+        # 计算绝对能量
+        energy_absolute = zero_zero_energy + energy_relative
+        # 转换为nm
+        wavelength_nm = cm_to_nm(energy_absolute)
+        
+        transitions.append({
+            'Energy (cm^-1)': energy_absolute,
+            'Wavelength (nm)': wavelength_nm,
+            'Initial State': initial_state,
+            'Final State': final_state,
+            'Intensity': intensity,
+            'DipStr': dip_str
+        })
+    
+    return zero_zero_energy_nm, transitions
+
+def write_results_to_file(file_path, zero_zero_energy_nm, transitions):
+    """将结果写入文件，transition从后往前写入"""
+    output_path = f"{file_path.replace('.log', '')}.txt"
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        # 写入0-0 transition能量
+        f.write(f"0-0 transition能量: {zero_zero_energy_nm:.2f} nm\n\n")
+        
+        # 写入表格头
+        header = f"{'能量(cm^-1)':<10} {'波长(nm)':<10} {'初始态':<17} {'终态':<18} {'强度':<10} {'DipStr':<10}\n"
+        f.write(header)
+        # f.write("-" * 100 + "\n")
+        
+        # 从后往前写入transition
+        for trans in reversed(transitions):
+            line = f"{trans['Energy (cm^-1)']:<12.2f} {trans['Wavelength (nm)']:<12.2f} " \
+                   f"{trans['Initial State']:<20} {trans['Final State']:<20} " \
+                   f"{trans['Intensity']:<12} {trans['DipStr']:<12}\n"
+            f.write(line)
+    
+    print(f"结果已写入文件: {output_path}")
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("请提供log文件路径作为参数")
+        sys.exit(1)
+    
+    file_path = sys.argv[1]
+    zero_zero_energy_nm, transitions = process_log_file(file_path)
+    write_results_to_file(file_path, zero_zero_energy_nm, transitions)

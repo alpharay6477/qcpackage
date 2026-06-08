@@ -1,0 +1,23 @@
+s1c=$(ls *s1.out | wc -l)
+t1c=$(ls *t1.out | wc -l)
+if [[ $s1c -gt 0 ]];then
+    printf "%20s%20s%20s%20s%20s%20s\n" "system" "dEst_adiab.(eV)" "dEst_vert.(eV)" "S1(Ha)" "T1(Ha)" "dGst(eV)"
+    for i in *s1.out;do
+        if  [[ -f ${i/s1.out}t1.out ]];then
+            s1e=$(awk '{if($0 ~/EXCITED STATES \(SINGLETS\)/) sflag=1;if(sflag==1 && $0 ~/STATE  1/) {print $4;exit}}' $i)
+            t1e=$(awk '{if($0 ~/EXCITED STATES \(TRIPLETS\)/) tflag=1;if(tflag==1 && $0 ~/STATE  1/) {print $4;exit}}' ${i/s1.out/}t1.out)
+            s1ge=$(awk  '/E\(SCF\)/{print $3}' $i)
+            t1ge=$(awk  '/E\(SCF\)/{print $3}' ${i/s1.out/}t1.out)
+            awk -v flnm=${i/s1.out/} -v se=$s1e -v te=$t1e -v sge=$s1ge -v tge=$t1ge '
+                BEGIN{printf "%20s%20.6f%20.6f%20.8f%20.8f%15.6f\n",flnm,(se+sge-te-tge)*27.2114,(se-te)*27.2114,se*27.2114,te*27.2114,(sge-tge)*27.2114} '
+         else
+            echo "${i/s1.out}t1.out not found, skip $i"
+         fi
+    done
+
+else
+    grep "STATE  1" *.out | awk '
+    BEGIN{printf "%20s%10s%10s%10s\n","system","dEst(eV)","S1","T1"}
+    {if(NR%2==1) {s1=$6;flnm=$1} if(NR%2==0){st=s1-$6;t1=$6;gsub(/.out:STATE/,"",flnm);printf "%20s%10.3f%10.3f%10.3f\n",flnm,st,s1,t1}}'
+fi
+

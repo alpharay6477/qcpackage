@@ -1,0 +1,129 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.log] "
+    echo ""
+    echo "如果提供了文件名，则替换命令中的*.log为指定文件"
+    echo "如果未提供文件名，则对当前目录下的所有*.log文件执行命令"
+    echo ""
+    echo "当前目录下需要对应的 ./tdvert/file_tdvert.log ./tdvert/file_tdopt.log"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+        exit 1
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# 如果传入了文件名，则使用该文件，否则使用所有 .log 文件
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+else
+    file_pattern="*.log"
+fi
+
+# 设置全局变量为当前目录和tdopt、tdvert目录的绝对路径
+current_dir=$(pwd)
+tdopt_dir=$(realpath tdopt)
+tdvert_dir=$(realpath tdvert)
+rmsd_dir="${current_dir}/RMSD"
+
+# 创建 RMSD 总文件夹
+mkdir -p $rmsd_dir
+
+# 执行转换和移动的函数
+process_file() {
+    local inf="$1"
+    local ito=${inf/.log/}_tdopt.log
+    local itv=${inf/.log/}_tdvert.log
+
+    # 处理 tdopt 文件夹中的文件
+    cd $tdopt_dir
+    check_error "进入目录 $tdopt_dir"
+
+    echo "Converting ${ito} to ${ito//log/xyz} ..."
+    Multiwfn ${ito} << EOF > /dev/null
+100
+2
+2
+${ito//log/xyz}
+0
+q
+EOF
+    check_error "运行 Multiwfn ${ito}"
+
+    if [[ -f "${ito//log/xyz}" ]]; then
+        mv ${ito//log/xyz} $rmsd_dir
+        check_error "移动文件 ${ito//log/xyz} 到 $rmsd_dir"
+    else
+        echo "Error: ${ito//log/xyz} was not created in tdopt."
+    fi
+
+    cd $current_dir
+    check_error "返回上一级目录"
+
+    wait
+
+    # 处理 tdvert 文件夹中的文件
+    cd $tdvert_dir
+    check_error "进入目录 $tdvert_dir"
+
+    echo "Converting ${itv} to ${itv//log/xyz} ..."
+    Multiwfn ${itv} << EOF > /dev/null
+100
+2
+2
+${itv//log/xyz}
+0
+q
+EOF
+    check_error "运行 Multiwfn ${itv}"
+
+    if [[ -f "${itv//log/xyz}" ]]; then
+        mv ${itv//log/xyz} $rmsd_dir
+        check_error "移动文件 ${itv//log/xyz} 到 $rmsd_dir"
+    else
+        echo "Error: ${itv//log/xyz} was not created in tdvert."
+    fi
+
+    cd $current_dir
+    check_error "返回上一级目录"
+
+    echo "xyz files have been moved to $rmsd_dir folder"
+
+    wait
+
+    cd $rmsd_dir
+    check_error "进入目录 $rmsd_dir"
+
+    rmsd_value=$(RMSD_calculator ${ito//log/xyz} ${itv//log/xyz})
+    rmsd_nh_value=$(RMSD_calculator -nh ${ito//log/xyz} ${itv//log/xyz})
+    check_error "运行 RMSD_calculator ${ito//log/xyz} ${itv//log/xyz}"
+
+    echo -e "${ito//log/xyz}\t${itv//log/xyz}\t${rmsd_value}" >> RMSD_results.txt
+    echo -e "${ito//log/xyz}\t${itv//log/xyz}\t${rmsd_nh_value}" >> RMSD_nh_results.txt
+    check_error "将 RMSD 结果写入 RMSD_results.txt"
+
+    echo "RMSD calculation complete and results appended to RMSD_results.txt and RMSD_nh_results.txt"
+}
+
+# 处理文件
+if [[ "$file_pattern" == "*.log" ]]; then
+    for file in $file_pattern; do
+        process_file "$file"
+    done
+else
+    process_file "$file_pattern"
+fi
+
+exit 0
+

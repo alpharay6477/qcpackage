@@ -1,0 +1,242 @@
+#!/bin/env python
+
+import sys
+import subprocess
+import os
+import glob
+from shutil import move
+from tempfile import NamedTemporaryFile
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
+
+def parse_gaussian_input(file_path):
+    """
+    解析Gaussian输入文件，提取电荷、多重度和坐标信息
+    """
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+
+    charge_mult = None
+    coords_start = None
+    coords_end = None
+    coords = []
+    in_coords_section = False
+    route_section_found = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        # 跳过空行
+        if not stripped:
+            if in_coords_section:
+                coords_end = i
+                break
+            continue
+
+        # 检查是否在路由部分（以!或#开头）
+        if stripped.startswith('!') or stripped.startswith('#'):
+            route_section_found = True
+            if in_coords_section:
+                coords_end = i
+                break
+            continue
+
+        # 检查是否在标题部分（/后跟空行结束标题）
+        if stripped.startswith('%') or stripped.startswith('--'):
+            if in_coords_section:
+                coords_end = i
+                break
+            continue
+
+        parts = stripped.split()
+
+        # 检查电荷和多重度行（只在路由部分之后，坐标部分之前）
+        if not in_coords_section and route_section_found and len(parts) == 2:
+            try:
+                charge = int(parts[0])
+                mult = int(parts[1])
+                # 多重度必须至少为1
+                if mult >= 1:
+                    charge_mult = (str(charge), str(mult))
+                    coords_start = i + 1
+                    in_coords_section = True
+                    continue
+            except ValueError:
+                pass  # 不是有效的整数
+
+        # 如果在坐标区域，解析坐标
+        if in_coords_section:
+            # 检查是否是坐标行（第一个是元素符号，后面三个是数字）
+            if len(parts) >= 4:
+                element = parts[0]
+                # 检查元素符号是否合理（字母开头）
+                if element and element[0].isalpha():
+                    try:
+                        x = float(parts[1])
+                        y = float(parts[2])
+                        z = float(parts[3])
+                        coords.append((element, x, y, z))
+                        continue
+                    except ValueError:
+                        pass  # 不是有效的坐标数字
+
+            # 如果到达这里，说明不是有效的坐标行，结束坐标区域
+            if coords:  # 只有当已经找到一些坐标时才结束
+                coords_end = i
+                break
+            else:
+                # 如果没有找到坐标，继续搜索
+                in_coords_section = False
+                charge_mult = None
+                coords_start = None
+
+    return charge_mult, coords, coords_start, coords_end, lines
+
+
+def write_xyz(charge_mult, coords, output_file):
+    """
+    将坐标写入XYZ文件
+    """
+    with open(output_file, 'w') as f:
+        # Write number of atoms
+        f.write(f"{len(coords)}\n")
+        # Write charge and multiplicity
+        f.write(f"{charge_mult[0]} {charge_mult[1]}\n")
+        # Write coordinates
+        for element, x, y, z in coords:
+            f.write(f"{element}       {x:.6f}     {y:.6f}     {z:.6f}\n")
+
+
+def process_single_gjf(input_file):
+    """处理单个GJF文件的函数"""
+    try:
+        print(f"\n{'='*60}")
+        print(f"Processing: {input_file}")
+        print(f"{'='*60}")
+
+        output_file = input_file.removesuffix(".gjf") + ".xyz"
+        
+        # 检查输出文件是否已存在
+        if os.path.exists(output_file):
+            print(f"Warning: Output file {output_file} already exists. Overwriting.")
+
+        charge_mult, coords, coords_start, coords_end, original_lines = parse_gaussian_input(input_file)
+
+        if charge_mult and coords and coords_start is not None:
+            print(f"Found coordinates starting at line {coords_start + 1}")
+            print(f"Charge: {charge_mult[0]}, Multiplicity: {charge_mult[1]}")
+            print(f"Number of atoms: {len(coords)}")
+
+            write_xyz(charge_mult, coords, output_file)
+            print(f"Coordinates written to {output_file}")
+            return True
+
+        else:
+            print(f"No coordinates found in: {input_file}")
+            print(f"Debug: charge_mult={charge_mult}, coords={len(coords) if coords else 0}, coords_start={coords_start}")
+            return False
+            
+    except Exception as e:
+        print(f"Error processing {input_file}: {e}")
+        return False
+
+
+def main():
+    """
+    主函数：处理所有GJF文件
+    """
+    # 获取gjf文件列表
+    if len(sys.argv) > 1 and sys.argv[1].strip():
+        # 处理传入的参数（可能是单个文件、多个文件或通配符）
+        input_args = sys.argv[1:]
+        gjf_files = []
+        
+        for arg in input_args:
+            # 使用glob匹配文件（支持通配符）
+            matched_files = glob.glob(arg)
+            
+            if matched_files:
+                # 过滤出.gjf文件
+                gjf_files.extend([f for f in matched_files if f.endswith('.gjf')])
+            else:
+                # 如果没有匹配到文件，检查是否是单个具体的文件名
+                if os.path.exists(arg):
+                    if arg.endswith('.gjf'):
+                        gjf_files.append(arg)
+                    else:
+                        print(f"Warning: {arg} is not a .gjf file, skipping.")
+                else:
+                    print(f"Warning: No files found matching '{arg}'")
+    else:
+        # 没有参数，默认获取当前目录所有.gjf文件
+        gjf_files = glob.glob("*.gjf")
+
+    if not gjf_files:
+        print("No .gjf files found!")
+        sys.exit(1)
+
+    # 去重
+    gjf_files = list(set(gjf_files))
+    gjf_files.sort()  # 按字母顺序排序
+    
+    print(f"Found {len(gjf_files)} .gjf files: {[os.path.basename(f) for f in gjf_files]}")
+
+    success_count = 0
+    failure_count = 0
+    
+    # 根据文件数量决定是否使用多进程
+    if len(gjf_files) > 1:
+        print(f"\nUsing multiprocessing with {multiprocessing.cpu_count()} cores...")
+        
+        # 使用多进程处理
+        with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count()) as executor:
+            future_to_file = {
+                executor.submit(process_single_gjf, gjf_file): gjf_file
+                for gjf_file in gjf_files
+            }
+
+            # 等待所有任务完成并收集结果
+            for i, future in enumerate(as_completed(future_to_file), 1):
+                gjf_file = future_to_file[future]
+                try:
+                    result = future.result()
+                    if result:
+                        success_count += 1
+                        print(f"[{i}/{len(gjf_files)}] Successfully processed: {gjf_file}")
+                    else:
+                        failure_count += 1
+                        print(f"[{i}/{len(gjf_files)}] Failed to process: {gjf_file}")
+                except Exception as e:
+                    print(f"[{i}/{len(gjf_files)}] Error processing {gjf_file}: {e}")
+                    failure_count += 1
+    else:
+        # 单文件处理
+        print("\nProcessing single file...")
+        for i, gjf_file in enumerate(gjf_files, 1):
+            print(f"\n[{i}/{len(gjf_files)}] Processing {gjf_file}")
+            try:
+                if process_single_gjf(gjf_file):
+                    success_count += 1
+                else:
+                    failure_count += 1
+            except Exception as e:
+                print(f"Error processing {gjf_file}: {e}")
+                failure_count += 1
+
+    # 输出总结
+    print(f"\n{'='*60}")
+    print("Processing Summary:")
+    print(f"{'='*60}")
+    print(f"Total files: {len(gjf_files)}")
+    print(f"Successful: {success_count}")
+    print(f"Failed: {failure_count}")
+    print(f"{'='*60}")
+    
+    if failure_count > 0:
+        sys.exit(1)
+    else:
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,84 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.inp] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.inp 文件使用"
+    echo ""
+    echo "生成计算光谱的 inp 文件，需要基态和激发态的 ./hess 和 ./tdopt/.hess 文件"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern=$(ls *.inp | grep -v 'tdopt')
+else
+  file_pattern="$1"
+fi
+
+
+# 处理文件
+
+# 执行转换和移动的函数
+deal_fchk() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > /dev/null 2>&1
+100
+2
+2
+${i/.inp/}.xyz
+exit
+EOF
+}
+
+
+for i in $file_pattern ;do
+    deal_fchk $i
+    cat > ${i/.inp/}_spec.inp << EOF
+! B3LYP/G def2-SVP TIGHTSCF ESD(FLUOR)      # 计算振动分辨荧光光谱关键词
+%TDDFT
+NROOTS 3
+IROOT 1
+END
+%ESD
+GSHESSIAN "${i/.inp/}.hess"       # 基态文件
+ESHESSIAN "${i/.inp/}_tdopt.hess"  # 激发态文件
+# HESSFLAG AHAS         # 选择如何获得激发态势能面（PES）
+FASTDER TRUE           # 是否使用快速导数算法
+APPROXADEN TRUE       # 是否近似计算能量差（ΔE）
+USEJ FALSE             # 是否考虑 Duschinsky 旋转
+USEB TRUE              # 是否将初始态的坐标也进行旋转处理
+COORDSYS CART          # 坐标形势
+TCUTFREQ 100          # 截断低于 100 cm⁻¹ 的频率，用于避免低频噪声
+IFREQFLAG REMOVE      # 如何处理虚频（负频率）
+UNIT NM               # 单位
+
+DOHT TRUE       # 是否考虑 Herzberg-Teller 效应
+LINES VOIGT                               # 线形函数
+LINEW 75                                  # 单位：cm-1 调整线形状
+INLINEW 100                               # 调整线形状
+END
+%pal nprocs 40
+     end
+%MaxCore 2560
+* XYZFILE 0 1 ${i/.inp/}.xyz
+EOF
+done
+
+wait
+
+exit 0
+

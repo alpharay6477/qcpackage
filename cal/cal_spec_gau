@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法: $(basename "$0") [filename.chk]  计算重组能对振动的分解，及振动分辨光谱"
+    echo ""
+    echo "如果提供了文件名，则替换命令中的*.chk为指定文件"
+    echo "如果未提供文件名，则对当前目录下的所有*.chk文件执行命令"
+    echo ""
+    echo "需要 ./ 和 ./tdopt 做振动分析"
+    echo "修改光谱峰位置：DataAdd=DeltaE=value (Hartree)"
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+
+# 如果传入了文件模式，则使用该模式，否则使用所有 .chk 文件
+file_pattern=$(ls *.chk)
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+mkdir -p spec_gau
+
+for inf in $file_pattern;do
+    cp ./$inf ./spec_gau
+    cp ./tdopt/${inf//.chk/_tdopt.chk} ./spec_gau
+done
+
+wait
+
+cd spec_gau
+
+for inf in $file_pattern;do
+output_file="${inf//.chk/_spec_gau.gjf}"
+    
+    # 写入内容到输出文件
+    cat << EOF > "$output_file"
+%mem=280GB
+%nproc=32
+%oldchk=$inf
+#p geom=allcheck freq(readfc,fcht,readfcht)
+
+initial=source=chk final=source=chk 
+spectroscopy=onephotonemission 
+Temperature 
+RedDim=ClearLowFreq=100.0 
+FORCEPRTSPECTRUM 
+Advanced=(ForceFCCalc)
+Spectrum=HWHM=400
+RedDim=BlockTol=3
+print=(huangrhys,matrix=JK)
+
+${inf//.chk/_tdopt.chk}
+$inf
+EOF
+
+    echo "Written to $output_file"
+done
+
+for inf in $file_pattern;do
+ # g16 "${inf//.chk/_spec_gau.gjf}"
+ echo "${inf//.chk/_spec_gau.gjf} done"
+done
+
+echo "已全部提交任务"

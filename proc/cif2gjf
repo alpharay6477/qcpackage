@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.cif] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.cif 文件使用"
+    echo ""
+    echo ".cif 文件转为 gjf 文件"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*.cif"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_cif() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > /dev/null 2>&1
+300
+7
+25
+1
+0
+-3
+
+exit
+EOF
+}
+
+
+# 处理文件
+
+
+for i in $file_pattern ;do
+    deal_cif $i
+done
+
+wait
+
+exit 0
+

@@ -1,0 +1,123 @@
+#!/bin/env python3
+"""
+EDA数据提取脚本 - 从子文件夹的eda.txt文件中提取能量分解分析数据
+"""
+
+import os
+import argparse
+
+def parse_arguments():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(
+        description='从子文件夹的eda.txt文件中提取指定能量数据',
+        epilog='示例:\n  python extract_eda.py\n  python extract_eda.py -i ./data -o results.txt\n  python extract_eda.py -v',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument(
+        '-i', '--input',
+        default='.',
+        help='输入目录（默认: 当前目录）'
+    )
+    parser.add_argument(
+        '-o', '--output',
+        default='eda_summary.txt',
+        help='输出文件名（默认: eda_summary.txt）'
+    )
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='显示详细处理过程'
+    )
+    
+    return parser.parse_args()
+
+def extract_data_from_file(filepath):
+    """从单个文件中提取数据"""
+    keywords = [
+        "Total interaction energy:",
+        "Electrostatic (E_els):",
+        "Exchange (E_x):",
+        "Pauli repulsion (E_rep):",
+        "Orbital (E_orb):",
+        "DFT correlation (E_DFTc):",
+        "Dispersion correction (E_dc):"
+    ]
+    
+    results = []
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+            for keyword in keywords:
+                # 查找包含关键词的行
+                for line in content.split('\n'):
+                    if keyword in line:
+                        results.append(line.strip())
+                        break
+    except:
+        pass
+    
+    return results
+
+def main():
+    args = parse_arguments()
+    
+    if args.verbose:
+        print("EDA数据提取工具")
+        print(f"搜索目录: {args.input}")
+        print(f"输出文件: {args.output}")
+        print("-" * 40)
+    
+    # 检查输入目录
+    if not os.path.isdir(args.input):
+        print(f"错误: '{args.input}' 不是有效目录")
+        return 1
+    
+    # 获取所有子文件夹
+    all_items = os.listdir(args.input)
+    subdirs = [d for d in all_items if os.path.isdir(os.path.join(args.input, d))]
+    
+    if not subdirs:
+        print("错误: 未找到子文件夹")
+        return 1
+    
+    # 处理每个子文件夹
+    output_lines = []
+    success_count = 0
+    
+    for subdir in sorted(subdirs):
+        eda_file = os.path.join(args.input, subdir, 'eda.txt')
+        
+        if os.path.exists(eda_file):
+            data = extract_data_from_file(eda_file)
+            if data:
+                output_lines.append(f"{subdir}")
+                output_lines.extend(data)
+                output_lines.append("")  # 空行分隔
+                success_count += 1
+                
+                if args.verbose:
+                    print(f"✓ {subdir}: 提取到 {len(data)} 个数据项")
+            else:
+                if args.verbose:
+                    print(f"✗ {subdir}: 未找到有效数据")
+        else:
+            if args.verbose:
+                print(f"- {subdir}: eda.txt不存在")
+    
+    # 写入输出文件
+    if output_lines:
+        with open(args.output, 'w') as f:
+            f.write('\n'.join(output_lines))
+        
+        print(f"\n完成！")
+        print(f"成功处理: {success_count}/{len(subdirs)} 个文件夹")
+        print(f"结果保存至: {args.output}")
+    else:
+        print("未提取到任何数据")
+        return 1
+    
+    return 0
+
+if __name__ == "__main__":
+    exit(main())

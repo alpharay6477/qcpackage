@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法: $(basename "$0") [filename.spectrum] 处理为origin预处理的数据"
+    echo "如果提供了文件名，则替换命令中的*.spectrum为指定文件"
+    echo "如果未提供文件名，则对当前目录下的所有*.spectrum文件执行命令"
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# 如果传入了文件名，则使用该文件，否则使用所有 .log 文件
+file_pattern="*.spectrum"
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+# 遍历所有 *_fluor.spectrum 文件
+for file in $file_pattern; do
+    # 提取文件名（去掉扩展名）
+    base_name=$(basename "$file" "_fluor.spectrum")
+    
+    # 创建输出文件
+    output_file="${base_name}_spectrum.txt"
+
+    # 读取文件并进行处理
+    awk '
+    BEGIN {
+        # 初始化最大值和最小值
+        max_intensity = -1
+        min_intensity = 1e+30
+    }
+    {
+        # 跳过标题行
+        if (NR == 1) {
+            next
+        }
+        
+        # 提取 Energy 和 IntensityFC
+        energy = $1
+        intensity_fc = $3
+        
+        # 更新最大值和最小值
+        if (intensity_fc > max_intensity) {
+            max_intensity = intensity_fc
+        }
+        if (intensity_fc < min_intensity) {
+            min_intensity = intensity_fc
+        }
+        
+        # 存储 Energy 和 IntensityFC
+        energy_array[NR] = energy
+        intensity_array[NR] = intensity_fc
+    }
+    END {
+        # 归一化并输出结果
+        print "Energy\tNormalized Intensity (a.u.)" > "'$output_file'"
+        for (i = 1; i <= NR; i++) {
+            normalized_intensity = (intensity_array[i] - min_intensity) / (max_intensity - min_intensity)
+            print energy_array[i] "\t" normalized_intensity >> "'$output_file'"
+        }
+    }
+    ' "$file"
+done
+
+echo "所有的 spectrum 文件已经处理完毕"

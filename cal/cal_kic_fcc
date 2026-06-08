@@ -1,0 +1,115 @@
+#!/bin/bash
+
+# 检查是否有参数传入
+usage() {
+    echo "Usage: $(basename "$0") [-h] baseline_chk_file"
+    echo
+    echo "计算 内转换速率 kic，需要基态的 ./*.chk文件，./tdopt/*_tdopt.chk文件（计算freq）。"
+    echo
+    echo "Options:"
+    echo "  -h    显示帮助信息并退出"
+    echo
+    echo " cal_HR_index *.chk 文件进行计算"
+    echo
+}
+
+while getopts ":h" opt; do
+    case ${opt} in
+        h )
+            usage
+            exit 0
+            ;;
+        \? )
+            echo "Invalid option: -$OPTARG" 1>&2
+            usage
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND -1))
+
+if [ $# -eq 0 ]; then
+    usage
+    exit 1
+fi
+
+fcc=$1
+
+mkdir -p "${fcc/.chk/}_kic"
+
+cp "$fcc" "./${fcc/.chk/}_kic/"
+cp "./tdopt/${fcc/.chk/}_tdopt.chk" "./${fcc/.chk/}_kic/"
+
+cd "${fcc/.chk/}_kic"
+
+# 加载 Intel 环境变量
+source /opt/intel/oneapi/setvars.sh
+
+wait
+if [ $? -ne 0 ]; then
+    echo "加载 Intel 环境变量失败"
+    exit 1
+fi
+# 转换所有 .chk 文件为 .fchk 文件
+for i in *.chk; do
+    formchk $i
+    if [ $? -ne 0 ]; then
+        echo "转换 $i 为 .fchk 文件失败"
+        exit 1
+    fi
+done
+
+wait
+
+# 生成 S0,S1 态的 fcc 文件
+for m in *.fchk; do
+    gen_fcc_state -i $m
+    if [ $? -ne 0 ]; then
+        echo "生成 $m 的 S0,S1 态的 fcc 文件失败"
+        exit 1
+    fi
+done
+
+# 生成热耦合矢量文件
+gen_fcc_dipfile -i ${fcc/.chk/}_tdopt.fchk -nac
+if [ $? -ne 0 ]; then
+    echo "生成热耦合矢量文件失败"
+    exit 1
+fi
+wait
+
+echo "正在使用 fcclass 计算 内转换速率 kic"
+
+# 创建 .inp 文件
+cat <<EOL > fcclasses.inp
+\$\$\$
+PROPERTY     =   IC  ; OPA/EMI/ECD/CPL/RR/TPA/TPCD/MCD/IC/NRSC
+MODEL        =   AH   ; AS/ASF/AH/VG/VGF/VH
+DIPOLE       =   FC   ; FC/HTi/HTf
+TEMP         =   298.15 ; (temperature in K) 
+;DE           = (read) ; (adiabatic/vertical energy in eV. By default, read from state files) 
+BROADFUN     =   LOR  ; GAU/LOR/VOI
+HWHM         =   0.01 ; (broadening width in eV)
+METHOD       =   TD   ; TI/TD
+FORCE_REAL   =  YES
+;VIBRATIONAL ANALYSIS 
+NORMALMODES  =   COMPUTE   ; COMPUTE/READ/IMPLICIT
+COORDS       =   INTERNAL ; CARTESIAN/INTERNAL
+;INPUT DATA FILES 
+STATE1_FILE  =   ${fcc/.chk/}_tdopt.fcc    ; 状态 s1 的 fcc 文件
+STATE2_FILE  =   ${fcc/.chk/}.fcc          ; 状态 s0 的 fcc 文件
+NAC_FILE   =   nac_${fcc/.chk/}_tdopt_fchk ; 状态 s1 的 偶极子 文件
+EOL
+
+wait
+
+rm *.chk
+rm *.fchk
+
+# 提交计算
+fcclasses3 fcclasses.inp
+
+wait
+
+
+

@@ -1,0 +1,179 @@
+#!/bin/env python
+
+
+import os
+import math
+import shutil
+from collections import defaultdict, deque
+
+# ======================
+# 检查 gjf 有几个片段，及其对应序号
+
+# 共价半径（Å）
+# ======================
+COVALENT_RADII = {
+    "H": 0.31, "He": 0.28,
+    "Li": 1.28, "Be": 0.96, "B": 0.84, "C": 0.76, "N": 0.71, "O": 0.66,
+    "F": 0.57, "Ne": 0.58,
+    "Na": 1.66, "Mg": 1.41, "Al": 1.21, "Si": 1.11, "P": 1.07,
+    "S": 1.05, "Cl": 1.02, "Ar": 1.06,
+    "K": 2.03, "Ca": 1.76,
+    "Sc": 1.70, "Ti": 1.60, "V": 1.53, "Cr": 1.39,
+    "Mn": 1.39, "Fe": 1.32, "Co": 1.26, "Ni": 1.24,
+    "Cu": 1.32, "Zn": 1.22,
+    "Br": 1.20, "I": 1.39
+}
+
+BOND_FACTOR = 1.25
+
+
+# ======================
+# Gaussian 解析
+# ======================
+def parse_xyz_input(file_path):
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+        
+    coords = []
+    in_coords = True
+
+    for line in lines[2:]:
+        stripped = line.strip()
+
+        parts = stripped.split()
+        if in_coords and len(parts) >= 4:
+            if parts[0][0].isalpha():
+                try:
+                    coords.append(
+                        (parts[0],
+                         float(parts[1]),
+                         float(parts[2]),
+                         float(parts[3]))
+                    )
+                except ValueError:
+                    break
+
+    return coords
+
+
+# ======================
+# 成键与片段识别
+# ======================
+def distance(a, b):
+    return math.sqrt(
+        (a[1] - b[1]) ** 2 +
+        (a[2] - b[2]) ** 2 +
+        (a[3] - b[3]) ** 2
+    )
+
+
+def build_bond_graph(coords):
+    graph = defaultdict(list)
+    n = len(coords)
+
+    for i in range(n):
+        ri = COVALENT_RADII.get(coords[i][0], 0.77)
+        for j in range(i + 1, n):
+            rj = COVALENT_RADII.get(coords[j][0], 0.77)
+            if distance(coords[i], coords[j]) <= BOND_FACTOR * (ri + rj):
+                graph[i].append(j)
+                graph[j].append(i)
+    return graph
+
+
+def find_fragments(graph, n_atoms):
+    visited = [False] * n_atoms
+    fragments = []
+
+    for i in range(n_atoms):
+        if not visited[i]:
+            queue = deque([i])
+            visited[i] = True
+            frag = [i + 1]  # 注意：这里存储的是1-based索引
+
+            while queue:
+                v = queue.popleft()
+                for nb in graph[v]:
+                    if not visited[nb]:
+                        visited[nb] = True
+                        queue.append(nb)
+                        frag.append(nb + 1)
+
+            fragments.append(frag)
+
+    # 按原子个数降序排序（大片段在前）
+    fragments.sort(key=lambda x: len(x), reverse=True)
+    
+    # 如果需要按第一个原子序号排序（保持原始顺序）
+    # fragments.sort(key=lambda x: x[0])
+    
+    return fragments
+
+# ======================
+# 连续编号压缩
+# ======================
+def compress_indices(indices):
+    if not indices:
+        return ""
+    
+    # 确保序号是排序的
+    indices = sorted(indices)
+    ranges = []
+    start = prev = indices[0]
+
+    for i in indices[1:]:
+        if i == prev + 1:
+            prev = i
+        else:
+            ranges.append((start, prev))
+            start = prev = i
+    ranges.append((start, prev))
+
+    # 将范围格式化为字符串
+    parts = []
+    for a, b in ranges:
+        if a == b:
+            parts.append(str(a))
+        else:
+            parts.append(f"{a}-{b}")
+    
+    return ",".join(parts)
+
+
+# ======================
+# 主流程
+# ======================
+def main():
+    files = [f for f in os.listdir('.') if f.lower().endswith(('.xyz'))]
+
+    for file in files:
+        base = os.path.splitext(file)[0]
+
+        coords = parse_xyz_input(file)
+        if not coords:
+            print(f"File: {file} - No coordinates found")
+            continue
+
+        # fragment.txt
+        graph = build_bond_graph(coords)
+        fragments = find_fragments(graph, len(coords))
+        
+        filename=os.path.splitext(file)[0]
+        
+        print(f"File: {filename}")
+        print(f"Total atoms: {len(coords)}")
+        print(f"Number of fragments: {len(fragments)}")
+        
+        # 为每个片段生成一行压缩后的原子序号，并显示原子个数
+        for idx, frag in enumerate(fragments, 1):
+            compressed = compress_indices(frag)
+            atom_count = len(frag)
+            print(f"Fragment {idx} ({atom_count} atoms): {compressed}")
+        
+        print()  # 空行分隔不同文件
+        
+
+
+if __name__ == "__main__":
+    main()
+

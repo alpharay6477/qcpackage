@@ -1,0 +1,79 @@
+#!/usr/bin/env python
+
+import sys,math
+name = sys.argv[1]
+nprint = 1
+
+logfile = open(name)
+elefound = False
+magfound = False
+nstate = 0
+elevec = []
+magvec = []
+for line in logfile:
+    if line[0:51] == " Ground to excited state transition electric dipole":
+        elefound = True
+        continue
+    if elefound:
+        if line[0:12] == "       state":
+            continue
+        if line[0:51] == " Ground to excited state transition velocity dipole":
+            elefound = False
+            continue
+        else:
+            nstate = nstate + 1
+            tmplist = []
+            tmplist.append(int(line.split()[0]))
+            tmplist.append(float(line.split()[1]))
+            tmplist.append(float(line.split()[2]))
+            tmplist.append(float(line.split()[3]))
+            elevec.append(tmplist)
+
+    if line[0:51] == " Ground to excited state transition magnetic dipole":
+        magfound = True
+        continue
+    if magfound:
+        if line[0:12] == "       state":
+            continue
+        if line[0:51] == " Ground to excited state transition velocity quadru":
+            magfound = False
+            break
+        else:
+            tmplist = []
+            tmplist.append(int(line.split()[0]))
+            tmplist.append(float(line.split()[1]))
+            tmplist.append(float(line.split()[2]))
+            tmplist.append(float(line.split()[3]))
+            magvec.append(tmplist)
+
+nprint = nstate #输出态的数目，默认输出所有的态
+for i in range(0,nprint):
+    elelist = elevec[i]
+    X1 = elelist[1]
+    Y1 = elelist[2]
+    Z1 = elelist[3]
+    maglist = magvec[i]
+    X2 = maglist[1]
+    Y2 = maglist[2]
+    Z2 = maglist[3]
+    absmiu_au = (X1*X1+Y1*Y1+Z1*Z1)**0.5
+    absmiu = absmiu_au/0.393456 # Debye or 10^-18 esu cm
+    absm_au = (X2*X2+Y2*Y2+Z2*Z2)**0.5
+    absm = absm_au*1.8548 #unit 10^-20 erg/G
+    dotmium = X1*X2+Y1*Y2+Z1*Z2
+    costheta = dotmium/(absmiu_au*absm_au)
+    #完整表达式：
+#    g = 4*costheta*absmiu*(1E-18)*absm*(1E-20)/((absmiu*(1E-18))**2+(absm*(1E-20))**2)
+    #简化表达式：
+    g = 4*costheta*absm*(1E-20)/(absmiu*(1E-18))
+    
+    print("state    %d" %(i+1))
+    print("absm_au      %f" %absm_au ) 
+    print("absmiu_au    %f" %absmiu_au )
+    print("absm     %f 10^-20 erg/G" %absm )
+    print("absmiu   %f 10^-18 esu cm" %absmiu )
+    print("costheta %f" %costheta )
+    print("g        %f" %g )
+    g = g*1000
+    print("g*1000   %f" %g )
+    print()

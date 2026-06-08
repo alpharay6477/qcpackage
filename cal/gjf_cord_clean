@@ -1,0 +1,256 @@
+#!/bin/env python3
+import sys
+import os
+import math
+from pathlib import Path
+
+def read_gjf_file(filepath):
+    """读取GJF文件并解析分子坐标"""
+    atoms = []
+    other_lines = []
+    in_coords_section = False
+    coord_start_line = -1
+    found_charge_mult = False
+    
+    with open(filepath, 'r') as f:
+        lines = f.readlines()
+    
+    for i, line in enumerate(lines):
+        line = line.rstrip('\n')
+        parts = line.strip().split()
+        
+        # 保存原始行（除了坐标行）
+        if not in_coords_section:
+            other_lines.append(line)
+        
+        # 检测电荷和自旋多重度行（0 1）
+        if not found_charge_mult and len(parts) == 2:
+            try:
+                charge = int(parts[0])
+                mult = int(parts[1])
+                found_charge_mult = True
+                # 下一行开始是坐标
+                in_coords_section = True
+                coord_start_line = i + 1
+                print(f"  找到电荷/自旋行: {charge} {mult}，坐标从第{i+2}行开始")
+                continue
+            except ValueError:
+                pass
+        
+        # 处理坐标区域
+        if in_coords_section:
+            # 检查是否是坐标行
+            if len(parts) >= 4:
+                element = parts[0]
+                # 检查元素符号是否合理（字母开头）
+                if element[0].isalpha():
+                    try:
+                        x = float(parts[1])
+                        y = float(parts[2])
+                        z = float(parts[3])
+                        atoms.append((element, (x, y, z), i, line))
+                        continue
+                    except ValueError:
+                        # 不是有效的坐标数字，可能坐标区域已结束
+                        in_coords_section = False
+                        other_lines.append(line)
+                else:
+                    # 不是元素符号，可能坐标区域已结束
+                    in_coords_section = False
+                    other_lines.append(line)
+            else:
+                # 空行或行太短，可能坐标区域已结束
+                if line.strip():  # 如果不是空行，添加到其他行
+                    other_lines.append(line)
+                in_coords_section = False
+    
+    print(f"  从文件读取到 {len(atoms)} 个原子")
+    return atoms, other_lines, coord_start_line
+
+def distance_squared(coord1, coord2):
+    """计算两个坐标之间距离的平方"""
+    x1, y1, z1 = coord1
+    x2, y2, z2 = coord2
+    dx = x1 - x2
+    dy = y1 - y2
+    dz = z1 - z2
+    return dx*dx + dy*dy + dz*dz
+
+def remove_close_atoms(atoms, threshold=0.09):
+    """移除距离过近的原子（只保留第一个）"""
+    if not atoms:
+        return atoms
+    
+    # 按元素分组
+    elements_dict = {}
+    for atom in atoms:
+        element, coords, line_idx, line_content = atom
+        if element not in elements_dict:
+            elements_dict[element] = []
+        elements_dict[element].append(atom)
+    
+    # 对每个元素组内的原子进行距离检查
+    filtered_atoms = []
+    
+    for element, element_atoms in elements_dict.items():
+        kept_atoms = []
+        
+        for atom in element_atoms:
+            element1, coords1, line_idx1, line_content1 = atom
+            too_close = False
+            
+            for kept_atom in kept_atoms:
+                element2, coords2, line_idx2, line_content2 = kept_atom
+                dist_sq = distance_squared(coords1, coords2)
+                
+                if dist_sq < threshold:
+                    too_close = True
+                    print(f"  移除原子: {element1} ({coords1[0]:.4f}, {coords1[1]:.4f}, {coords1[2]:.4f}) - "
+                          f"距离 {element2} ({coords2[0]:.4f}, {coords2[1]:.4f}, {coords2[2]:.4f}) 为 {math.sqrt(dist_sq):.4f} Å")
+                    break
+            
+            if not too_close:
+                kept_atoms.append(atom)
+        
+        filtered_atoms.extend(kept_atoms)
+    
+    # 按原始行索引排序
+    filtered_atoms.sort(key=lambda x: x[2])
+    
+    return filtered_atoms
+
+def write_gjf_file(filepath, other_lines, filtered_atoms, coord_start_line):
+    """将处理后的内容写回GJF文件"""
+    # 重构文件内容
+    output_lines = []
+    
+    # 将其他行添加到输出中，直到坐标开始行
+    for i in range(coord_start_line - 1):
+        if i < len(other_lines):
+            output_lines.append(other_lines[i])
+        else:
+            break
+    
+    # 添加电荷和自旋多重度行
+    if coord_start_line - 1 < len(other_lines):
+        output_lines.append(other_lines[coord_start_line - 1])
+    
+    # 添加过滤后的原子坐标
+    for atom in filtered_atoms:
+        element, (x, y, z), line_idx, line_content = atom
+        # 保持原始格式
+        output_lines.append(f"{element}                 {x:12.8f}    {y:12.8f}    {z:12.8f}")
+    
+    # 添加剩余的其他行（如果有）
+    for i in range(coord_start_line, len(other_lines)):
+        output_lines.append(other_lines[i])
+    
+    # 写入文件
+    with open(filepath, 'w') as f:
+        f.write('\n'.join(output_lines))
+    
+    return len(filtered_atoms)
+
+def process_gjf_file(filepath):
+    """处理单个GJF文件"""
+    print(f"\n处理文件: {filepath}")
+    
+    try:
+        # 读取文件
+        atoms, other_lines, coord_start_line = read_gjf_file(filepath)
+        
+        if not atoms:
+            print(f"  错误: {filepath} 中未找到原子坐标")
+            return 0, 0
+        
+        print(f"  找到 {len(atoms)} 个原子")
+        
+        # 移除距离过近的原子
+        filtered_atoms = remove_close_atoms(atoms)
+        
+        removed_count = len(atoms) - len(filtered_atoms)
+        
+        if removed_count > 0:
+            print(f"  移除了 {removed_count} 个距离过近的原子")
+            print(f"  保留 {len(filtered_atoms)} 个原子")
+            
+            # 备份原始文件
+            backup_path = filepath + '.bak'
+            with open(backup_path, 'w') as f:
+                f.write('\n'.join(other_lines))
+                # 添加原始原子坐标
+                charge_mult_line = other_lines[coord_start_line - 1] if coord_start_line - 1 < len(other_lines) else "0 1"
+                f.write('\n' + charge_mult_line)
+                for atom in atoms:
+                    element, (x, y, z), line_idx, line_content = atom
+                    f.write(f"\n{element}                 {x:12.8f}    {y:12.8f}    {z:12.8f}")
+            
+            print(f"  原始文件已备份为: {backup_path}")
+            
+            # 写回处理后的文件
+            final_count = write_gjf_file(filepath, other_lines, filtered_atoms, coord_start_line)
+            print(f"  处理完成，已保存到: {filepath}")
+        else:
+            print(f"  无需移除原子")
+        
+        return len(atoms), removed_count
+    
+    except Exception as e:
+        print(f"  处理文件 {filepath} 时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return 0, 0
+
+def main():
+    # 检查命令行参数
+    if len(sys.argv) == 1:
+        # 没有参数，处理当前目录下所有.gjf文件
+        gjf_files = list(Path('.').glob('*.gjf'))
+        
+        if not gjf_files:
+            print("当前目录下未找到.gjf文件")
+            print("\n用法:")
+            print("  command.py                     # 处理当前目录下所有.gjf文件")
+            print("  command.py filename.gjf       # 处理单个.gjf文件")
+            return
+        
+        print(f"找到 {len(gjf_files)} 个GJF文件")
+        total_atoms = 0
+        total_removed = 0
+        
+        for gjf_file in gjf_files:
+            atoms_count, removed_count = process_gjf_file(str(gjf_file))
+            total_atoms += atoms_count
+            total_removed += removed_count
+        
+        print(f"\n总结:")
+        print(f"  处理了 {len(gjf_files)} 个文件")
+        print(f"  总共 {total_atoms} 个原子，移除了 {total_removed} 个距离过近的原子")
+    
+    elif len(sys.argv) == 2:
+        # 处理单个文件
+        filename = sys.argv[1]
+        
+        if not os.path.exists(filename):
+            print(f"错误: 文件 '{filename}' 不存在")
+            sys.exit(1)
+        
+        if not filename.lower().endswith('.gjf'):
+            print(f"警告: 文件 '{filename}' 不是.gjf文件")
+        
+        atoms_count, removed_count = process_gjf_file(filename)
+        print(f"\n总结:")
+        print(f"  文件: {filename}")
+        print(f"  原始原子数: {atoms_count}")
+        print(f"  移除原子数: {removed_count}")
+        print(f"  最终原子数: {atoms_count - removed_count}")
+    
+    else:
+        print("错误: 参数太多")
+        print("\n用法:")
+        print("  command.py                     # 处理当前目录下所有.gjf文件")
+        print("  command.py filename.gjf       # 处理单个.gjf文件")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

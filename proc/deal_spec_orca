@@ -1,0 +1,68 @@
+#!/bin/env python
+import os
+
+import numpy as np
+import argparse
+
+def cm_to_nm(wavenumber):
+    """将波数(cm^-1)转换为波长(nm)"""
+    return 1e7 / wavenumber if wavenumber != 0 else 0
+
+def process_spectrum(input_file, output_file, min_nm=300, max_nm=800):
+    """
+    处理spectrum文件：
+    1. 读取Energy(cm^-1)和IntensityFC列
+    2. 将Energy转换为nm
+    3. 筛选300-800nm范围的数据
+    4. 对IntensityFC归一化
+    5. 保存结果
+    """
+    # 读取数据
+    data = np.loadtxt(input_file, skiprows=1)  # 跳过标题行
+    energy_cm = data[:, 0]
+    intensity_fc = data[:, 2]
+    
+    # 转换为nm
+    wavelength_nm = np.array([cm_to_nm(e) for e in energy_cm])
+    
+    # 筛选指定范围
+    mask = (wavelength_nm >= min_nm) & (wavelength_nm <= max_nm)
+    filtered_wavelength = wavelength_nm[mask]
+    filtered_intensity = intensity_fc[mask]
+    
+    # 按波长排序
+    sorted_indices = np.argsort(filtered_wavelength)
+    sorted_wavelength = filtered_wavelength[sorted_indices]
+    sorted_intensity = filtered_intensity[sorted_indices]
+    
+    # 归一化强度 (0-1范围)
+    normalized_intensity = (sorted_intensity - np.min(sorted_intensity)) / \
+                         (np.max(sorted_intensity) - np.min(sorted_intensity))
+    
+    # 保存结果（三列：波长，原始强度，归一化强度）
+    np.savetxt(output_file, 
+               np.column_stack((sorted_wavelength, sorted_intensity, normalized_intensity)),
+               fmt=['%.6f', '%.6e', '%.6f'],
+               header='Wavelength (nm)\tIntensity FC\tNormalized Intensity',
+               delimiter='\t',
+               comments='')
+    
+    print(f"处理完成! 结果已保存到 {output_file}")
+    print(f"找到 {len(sorted_wavelength)} 个在 {min_nm}-{max_nm}nm 范围内的数据点")
+    print(f"归一化范围: {np.min(sorted_intensity):.2e} ~ {np.max(sorted_intensity):.2e}")
+
+if __name__ == "__main__":
+    # 设置命令行参数解析
+    parser = argparse.ArgumentParser(description='处理.spectrum文件：提取Energy和IntensityFC，转换为波长数据并归一化。')
+    parser.add_argument('input_file', help='输入的.spectrum文件路径')
+    parser.add_argument('-o', '--output', default='filtered_spectrum.txt', 
+                       help='输出文件名 (默认: filtered_spectrum.txt)')
+    parser.add_argument('--min', type=float, default=300, 
+                       help='最小波长(nm) (默认: 300)')
+    parser.add_argument('--max', type=float, default=800, 
+                       help='最大波长(nm) (默认: 800)')
+    
+    args = parser.parse_args()
+    args.output = args.input_file + ".fc" 
+    # 调用处理函数
+    process_spectrum(args.input_file, args.output, args.min, args.max)

@@ -1,0 +1,83 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.log] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.log 文件使用"
+    echo ""
+    echo "生成 NMR 图片数据，泛函和基组 B972/pgSsceg-1"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*nmr.log"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_cnmr() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > /dev/null 2>&1
+11
+7
+7
+1
+e
+1
+2
+exit
+EOF
+}
+
+deal_hnmr() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > /dev/null 2>&1
+11
+7
+6
+H
+7
+1
+e
+1
+2
+exit
+EOF
+}
+
+# 处理文件
+
+for i in $file_pattern ;do
+    deal_cnmr $i
+    mv dislin.png ${i/.log/}_C.png
+    paste  NMR_line.txt NMR_curve.txt > ${i/.log/}_C.txt
+    rm NMR_line.txt NMR_curve.txt
+    wait 
+
+    deal_hnmr $i
+    wait 
+    mv dislin.png ${i/.log/}_H.png
+    paste  NMR_line.txt NMR_curve.txt > ${i/.log/}_H.txt
+    rm NMR_line.txt NMR_curve.txt
+done
+
+wait
+
+exit 0
+

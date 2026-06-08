@@ -1,0 +1,188 @@
+#!/bin/bash
+
+# 检查是否提供了log文件参数
+if [ -z "$1" ]; then
+    echo "使用方法: $0 <log文件>"
+    echo "示例: $0 test.log"
+    exit 1
+fi
+
+# 获取log文件名（不含扩展名）
+log_file="$1"
+base_name="${log_file%.log}"
+gjf_file="${base_name}.gjf"
+
+# 检查文件是否存在
+if [ ! -f "$log_file" ]; then
+    echo "错误: 找不到log文件 '$log_file'"
+    exit 1
+fi
+
+if [ ! -f "$gjf_file" ]; then
+    echo "错误: 找不到gjf文件 '$gjf_file'"
+    exit 1
+fi
+
+# echo "=== 步骤1: 读取原始gjf文件中坐标后的内容（包括空行） ==="
+
+# 方法1：使用awk但保留所有行，包括空行和末尾空行
+saved_content_file="${gjf_file}.saved_content.$$"
+
+# 使用awk将坐标后的内容直接写入文件
+awk '
+BEGIN { 
+    in_coords = 0      # 是否在坐标部分内
+    save_mode = 0      # 是否开始保存内容
+    line_count = 0     # 保存的行数计数
+}
+
+{
+    # 判断是否是原子坐标行: 元素符号 + 三个数字
+    is_coord = 0
+    if ($1 ~ /^[A-Z][a-z]?$/ && NF >= 4) {
+        # 检查第二、三、四列是否都是数字（可能带符号和小数点）
+        if ($2 ~ /^-?[0-9]/ && $3 ~ /^-?[0-9]/ && $4 ~ /^-?[0-9]/) {
+            is_coord = 1
+        }
+    }
+    
+    if (save_mode) {
+        # 已经在保存模式，保存所有行（包括空行）
+        print $0
+        line_count++
+    } else {
+        if (is_coord) {
+            # 当前行是坐标行
+            in_coords = 1
+        } else {
+            # 当前行不是坐标行
+            if (in_coords) {
+                # 刚刚离开坐标部分，开始保存
+                save_mode = 1
+                # 保存这第一行
+                print $0
+                line_count = 1
+            }
+            in_coords = 0
+        }
+    }
+}
+' "$gjf_file" > "$saved_content_file"
+
+# 如果awk方法没找到内容，使用sed方法
+if [ ! -s "$saved_content_file" ]; then
+    # echo "使用sed方法读取坐标后内容..."
+    # 找到坐标结束的行号
+    last_coord_line=$(grep -n "^ *[A-Z][a-z]*  *-*[0-9]" "$gjf_file" | tail -1 | cut -d: -f1 2>/dev/null)
+    if [ -n "$last_coord_line" ]; then
+        # 从坐标最后一行之后开始保存所有内容
+        tail -n +$((last_coord_line + 1)) "$gjf_file" > "$saved_content_file"
+    fi
+fi
+
+# echo "保存的内容行数: $(wc -l < "$saved_content_file" 2>/dev/null || echo "0")"
+# echo "保存的内容字符数: $(wc -c < "$saved_content_file" 2>/dev/null || echo "0")"
+if [ -s "$saved_content_file" ]; then
+    # echo "保存的内容预览（显示控制字符）:"
+    # echo "----------------------------------------"
+    # 用cat -A显示所有字符（包括换行符）
+    head -15 "$saved_content_file" | cat -A
+    # echo "----------------------------------------"
+    # echo "最后几行（显示空行）:"
+    tail -5 "$saved_content_file" | sed 's/^$/【空行】/'
+fi
+
+# echo -e "\n=== 步骤2: 执行 qcinp.py ==="
+# echo "执行: qcinp.py $log_file"
+qcinp.py "$log_file"
+
+# 检查新的gjf文件是否生成
+if [ ! -f "$gjf_file" ]; then
+    echo "错误: qcinp.py 没有生成gjf文件"
+    rm -f "$saved_content_file"
+    exit 1
+fi
+
+# echo -e "\n=== 步骤3: 处理新的gjf文件 ==="
+# echo "删除坐标后的所有内容（包括空行），然后追加保存的内容..."
+
+# 创建临时文件
+temp_file="${gjf_file}.tmp.$$"
+
+# 处理新gjf文件：只保留坐标部分，完全删除坐标后的所有内容
+awk '
+BEGIN {
+    in_coords = 0          # 是否在坐标部分
+    printed_coords = 0     # 坐标部分是否已处理完
+}
+
+{
+    # 判断是否是原子坐标行
+    is_coord = 0
+    if ($1 ~ /^[A-Z][a-z]?$/ && NF >= 4) {
+        if ($2 ~ /^-?[0-9]/ && $3 ~ /^-?[0-9]/ && $4 ~ /^-?[0-9]/) {
+            is_coord = 1
+        }
+    }
+    
+    if (!printed_coords) {
+        # 坐标部分还没有处理完
+        if (is_coord) {
+            # 坐标行
+            in_coords = 1
+            print $0
+        } else {
+            if (in_coords) {
+                # 刚离开坐标部分
+                in_coords = 0
+                printed_coords = 1
+                # 完全停止输出，不输出任何内容
+                # 包括不输出这一行（即使是空行也不输出）
+            } else {
+                # 坐标部分之前的内容
+                print $0
+            }
+        }
+    }
+    # 坐标部分已处理完，所有后续行都不输出
+}
+' "$gjf_file" > "$temp_file"
+
+# echo "新文件坐标部分处理完成"
+# echo "原始文件行数: $(wc -l < "$gjf_file")"
+# echo "处理后行数（仅坐标部分）: $(wc -l < "$temp_file")"
+
+# 追加之前保存的内容
+if [ -s "$saved_content_file" ]; then
+    # echo "追加保存的内容（严格保持原样）..."
+    # 使用cat追加文件内容，保持原样（包括末尾空行）
+    cat "$saved_content_file" >> "$temp_file"
+    # echo "追加完成"
+    # echo "追加的内容行数: $(wc -l < "$saved_content_file")"
+else
+    echo "警告: 没有保存的内容可追加"
+fi
+
+# 替换原文件
+mv "$temp_file" "$gjf_file"
+
+# 清理临时文件
+rm -f "$saved_content_file"
+
+# echo -e "\n=== 步骤4: 完成 ==="
+# echo "文件已更新: $gjf_file"
+# echo "最终行数: $(wc -l < "$gjf_file")"
+
+# 显示结果
+# echo -e "\n=== 最终文件预览 ==="
+# echo "前20行:"
+head "$gjf_file"
+# echo -e "\n..."
+# echo "最后10行:"
+tail "$gjf_file"
+
+# 检查空行是否被保留
+# echo -e "\n=== 空行检查 ==="
+# echo "文件中空行数量: $(grep -c '^$' "$gjf_file" || echo "0")"
+# echo "最后10行的行号显示（以查看末尾空行）:"
+tail -10 "$gjf_file" | cat -n | sed 's/^/    /'

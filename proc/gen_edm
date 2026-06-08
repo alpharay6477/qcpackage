@@ -1,0 +1,62 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename.fchk] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *.fchk 文件使用"
+    echo ""
+    echo "生成 electron-density map 在 z=0 的 XY 平面"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*.fchk"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal.fchk() {
+    local ito=$1
+    echo "Converting $1"
+    Multiwfn ${ito} << EOF > /dev/null 2>&1
+4
+1
+1
+200,200
+1
+0
+1
+0 0.3
+0
+EOF
+}
+
+
+# 2 3 1
+
+# 处理文件
+
+
+for i in $file_pattern ;do
+    deal.fchk $i
+    mv dislin.png ${i/.fchk/}-dislin.png
+done
+
+wait
+
+exit 0
+

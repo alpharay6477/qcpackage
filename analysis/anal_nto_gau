@@ -1,0 +1,72 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法: $(basename "$0") [filename.log]"
+    echo ""
+    echo "如果提供了文件名，则替换命令中的*_nto.log为指定文件"
+    echo ""
+    echo ""如果未提供文件名，则对当前目录下的所有*_nto.log文件执行命令
+    echo ""
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# 如果传入了文件名，则使用该文件，否则使用所有 .log 文件
+file_pattern="*_nto.log"
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+# 遍历每个符合条件的文件
+for input_file in $file_pattern; do
+    # 定义输出文件
+    output_file="${input_file%.log}_extracted.txt"
+
+    # 初始化变量
+    last_occ_line=""
+    first_virt_line=""
+    current_transition_label=""
+
+    # 清空输出文件
+    > "$output_file"
+
+    echo "如果使用 cal_nto_gau 脚本进行计算，则前三个为单重态的 NTO，后三个为三重态的 NTO。" >> "$output_file"
+
+    # 读取文件
+    while IFS= read -r line; do
+        # 检查是否是一个新的跃迁
+        if [[ "$line" == *"Population analysis using the Ground to state"* ]]; then
+            # 提取跃迁序数
+            if [[ "$line" =~ ([0-9]+)\ trans\ dens ]]; then
+                current_transition_label="${BASH_REMATCH[1]} trans dens."
+            fi
+
+            echo "Transition  ($current_transition_label):" >> "$output_file"
+        fi
+
+        # 检查是否是 Alpha occ. eigenvalues
+        if [[ "$line" == *"Alpha  occ. eigenvalues"* ]]; then
+            last_occ_line="$line"
+        elif [[ -n "$last_occ_line" && "$line" == *"Alpha virt. eigenvalues"* ]]; then
+            # 仅抓取第一个出现的 Alpha virt. eigenvalues
+            first_virt_line="$line"
+	    
+        fi  
+        if [[  -n "$last_occ_line" && -n "$first_virt_line" ]]; then
+             echo "$last_occ_line" >> "$output_file"
+             echo "$first_virt_line" >> "$output_file"
+	     last_occ_line=""
+	     first_virt_line=""
+        fi
+
+    done < "$input_file"
+
+
+    echo "Eigenvalues extraction complete for $input_file. Results saved to $output_file."
+done
+

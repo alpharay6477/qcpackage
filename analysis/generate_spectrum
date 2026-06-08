@@ -1,0 +1,92 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import argparse
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
+
+def load_cie_observer():
+    """
+    加载 CIE 1931 标准观察者颜色匹配函数（2°视场）
+    数据来源：http://www.cvrl.org/cmfs.htm
+    """
+    # CIE 1931 标准数据（波长：360-830nm，间隔1nm）
+    cie_data = np.genfromtxt('cie_1931_2deg.csv', delimiter=',', skip_header=1)
+    wavelength = cie_data[:, 0]  # 波长 (nm)
+    x_bar = cie_data[:, 1]       # x̄(λ)
+    y_bar = cie_data[:, 2]       # ȳ(λ)
+    z_bar = cie_data[:, 3]       # z̄(λ)
+    return wavelength, x_bar, y_bar, z_bar
+
+def calculate_xyz(spectrum_wl, spectrum_intensity):
+    """
+    计算三刺激值 X, Y, Z
+    参数:
+        spectrum_wl (np.ndarray): 光谱波长 (nm)
+        spectrum_intensity (np.ndarray): 光谱强度 (任意单位)
+    返回:
+        X, Y, Z (float): 三刺激值
+    """
+    # 加载 CIE 观察者数据
+    cie_wl, x_bar, y_bar, z_bar = load_cie_observer()
+    
+    # 插值光谱数据到 CIE 的波长范围
+    interp_spectrum = interp1d(
+        spectrum_wl, spectrum_intensity,
+        kind='linear', bounds_error=False, fill_value=0.0
+    )
+    interped_intensity = interp_spectrum(cie_wl)
+    
+    # 计算三刺激值（积分 ≈ 求和）
+    X = np.sum(interped_intensity * x_bar)
+    Y = np.sum(interped_intensity * y_bar)
+    Z = np.sum(interped_intensity * z_bar)
+    
+    return X, Y, Z
+
+def generate_gaussian_spectrum(peak_position_nm, fwhm_nm, num_points=200):
+    """生成高斯展宽的光谱数据点 (x, y)"""
+    sigma = fwhm_nm / (2 * np.sqrt(2 * np.log(2)))
+    x = np.linspace(peak_position_nm - 3*sigma, peak_position_nm + 3*sigma, num_points)
+    y = np.exp(-0.5 * ((x - peak_position_nm) / sigma)**2)
+    return x, y
+
+def main():
+    parser = argparse.ArgumentParser(description="生成高斯光谱并计算 CIE xy 色度坐标")
+    parser.add_argument("peak_position", type=float, help="光谱峰位置 (nm)")
+    parser.add_argument("fwhm", type=float, help="半峰宽 (nm)")
+    parser.add_argument("--output", type=str, default="spectrum_data.txt", help="输出文件名")
+    parser.add_argument("--plot", action="store_true", help="绘制光谱图")
+    
+    args = parser.parse_args()
+    
+    # 生成光谱数据
+    x, y = generate_gaussian_spectrum(args.peak_position, args.fwhm)
+    
+    # 计算 CIE xy 坐标
+    X, Y, Z = calculate_xyz(x, y)
+    x_chromatic = X / (X + Y + Z)
+    y_chromatic = Y / (X + Y + Z)
+    
+    # 输出结果
+    print(f"CIE 1931 色度坐标: x = {x_chromatic:.4f}, y = {y_chromatic:.4f}")
+    
+    # 保存光谱数据
+    with open(args.output, 'w') as f:
+        f.write("# Wavelength (nm)\tIntensity (normalized)\n")
+        for xi, yi in zip(x, y):
+            f.write(f"{xi:.4f}\t{yi:.6f}\n")
+    
+    # 可选绘图
+    if args.plot:
+        plt.plot(x, y, 'b-', label=f"Peak: {args.peak_position} nm, FWHM: {args.fwhm} nm")
+        plt.xlabel("Wavelength (nm)")
+        plt.ylabel("Intensity")
+        plt.title(f"Gaussian Spectrum (CIE xy: {x_chromatic:.3f}, {y_chromatic:.3f})")
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+
+if __name__ == "__main__":
+    main()

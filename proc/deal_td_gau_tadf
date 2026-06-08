@@ -1,0 +1,135 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法: $(basename "$0") [filename.log]"
+    echo "如果提供了文件名，则替换命令中的*.log为指定文件"
+    echo "如果未提供文件名，则对当前目录下的所有*.log文件执行命令"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+        exit 1
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+# 如果传入了文件名，则使用该文件，否则使用所有 .log 文件
+file_pattern="*.log"
+if [[ -n "$1" ]]; then
+    file_pattern="$1"
+fi
+
+# 计算传入文件数量
+file_num=$(ls -1 ${file_pattern} 2>/dev/null | wc -l)
+
+# 如果没有文件，退出脚本
+if [[ $file_num -eq 0 ]]; then
+    echo "没有找到匹配的 .log 文件。"
+    exit 1
+fi
+
+rm slurm-*
+rm sub_*sbatch
+
+# 执行第一个命令:处理计算能得到的文件
+echo "正在处理 .chk 文件。"
+if [[ $file_num -gt $(ls -1 *.fchk 2>/dev/null | wc -l)  ]]; then
+    for inf in ${file_pattern//.log/.chk}; do
+        echo "执行: formchk $inf"
+        formchk $inf > /dev/null 2>&1
+        check_error "formchk $inf"
+    done
+fi
+
+echo "正在计算 soc 需要 .log .chk .rwf 文件。"
+if [[ $file_num -gt $(ls -l *-soc 2>/dev/null |grep "^d"| wc -l)  ]]; then
+    for inf in $file_pattern; do
+        echo "执行: calcsoc  $inf"
+        calcsoc -s 5 -t 5 $inf > /dev/null 2>&1
+        check_error "calcsoc -s 5 -t 5 $inf"
+    done
+fi
+
+echo "生成激发态信息"
+# 执行第二个命令：生成激发态信息
+echo "执行: tmwfn.py $file_pattern  >> td_info.txt"
+tmwfn.py -e st5cm $file_pattern | tail -n $((file_num*5+2)) >> td_info.txt
+echo " " >> td_info.txt
+echo " " >> td_info.txt
+check_error "tmwfn.py -e st5cm $file_pattern"
+
+echo "执行: tmwfn.py $file_pattern >> td_info.txt"
+tmwfn.py -o h2-l2 $file_pattern >> td_info.txt
+echo " " >> td_info.txt
+echo " " >> td_info.txt
+check_error "tmwfn.py -o h2-l2 $file_pattern"
+
+# 执行第三个命令：绘制格点文件
+echo "执行: MCubeGen.py -o h-l $file_pattern"
+MCubeGen.py -o h-l $file_pattern > /dev/null 2>&1
+check_error "MCubeGen.py -o h1-l1 $file_pattern"
+
+echo "执行: MCubeGen.py -e s1,t1:ele,hole $file_pattern"
+MCubeGen.py -e s1,t1:ele,hole $file_pattern > /dev/null 2>&1
+check_error "MCubeGen.py -e s1,t1:ele,hole $file_pattern"
+
+
+# 修改 cub 文件后缀
+
+cd MCUBEG || { echo "无法切换到目录 MCUBEG"; exit 1; }
+
+#find . -type f -name '*_ele.cub*' -exec bash -c 'mv "$1" "${1//_ele.cub/-ele.cub}"' _ {} \;
+#find . -type f -name '*_hole.cub*' -exec bash -c 'mv "$1" "${1//_hole.cub/-hole.cub}"' _ {} \;
+
+# 执行第四个命令：计算重组能
+
+cd ../../tdopt || { echo "无法切换到目录 ../tdopt"; exit 1; }
+
+
+rm slurm-*
+rm sub_*sbatch
+for i in *.chk; do formchk $i; done
+echo '生成 tdm 信息'
+gen_tdm_info
+
+
+echo "计算重组能，需要 ../tdopt"
+printf "%-20s%20s%20s%20s\n" filename s0_reorg s1_reorg tot_reorg >> ../tdvert/td_info.txt
+for inf in ${file_pattern//tdvert/tdopt}; do
+    echo "处理文件: $inf"
+    s0s0=$(awk '/Done/{print $5}' $inf | head -n 1)
+    s0s1=$(awk '/Done/{print $5}' $inf | tail -n 1)
+    s1s1=$(awk '/Total Energy/{print $5}' $inf | tail -n 1)
+    s1s0=$(awk '/Total Energy/{print $5}' $inf | head -n 1)
+    reorg=$(echo "($s0s1 - $s0s0 + $s1s0 - $s1s1) *27.2114" | bc)
+    s0re=$(echo "($s0s1 - $s0s0) *27.2114" | bc)
+    s1re=$(echo "($s1s0 - $s1s1) *27.2114" | bc)
+    printf "%-20s%20.6f%20.6f%20.6f\n" "${inf/.log/}" $s0re $s1re $reorg >> ../tdvert/td_info.txt
+    check_error "reorg $inf"
+done
+
+echo "正在计算 RMSD"
+cd ../
+
+rm slurm-*
+rm sub_*sbatch
+for i in *.chk; do formchk $i; done
+cal_RMSD_py
+wait
+echo "正在计算 HR_index"
+ls *.chk | xargs -P 16 -I {} cal_HR_fcc {}
+wait
+echo "生成盒子 pdb 文件"
+gen_pdb
+#echo "正在使用 Gaussian 16 计算光谱"
+#cal_spec_gau
+
+exit 0

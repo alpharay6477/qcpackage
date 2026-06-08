@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+import re
+import os
+import sys
+import numpy as np
+from pathlib import Path
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+
+
+def parse_orca_spectrum(filename):
+    """
+    解析Orca输出的光谱文件，提取跃迁信息
+    找到ABSORPTION SPECTRUM字符串后，只匹配到下一个空行之前的内容
+    """
+    transitions = []
+    
+    with open(filename, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # 找到目标字符串位置
+    target_pattern = "ABSORPTION SPECTRUM VIA FULL SEMI-CLASSICAL FORMULATION"
+    target_index = content.find(target_pattern)
+    
+    if target_index == -1:
+        print("警告: 未找到目标字符串")
+        return transitions
+    
+    # 从目标位置开始提取内容，直到下一个空行
+    content_after_target = content[target_index:]
+    
+    # 查找下一个空行（两个连续的换行符）
+    empty_line_index = content_after_target.find('\n\n')
+    
+    if empty_line_index != -1:
+        # 只提取到空行之前的内容
+        search_content = content_after_target[:empty_line_index]
+        print("找到空行边界，限制搜索范围")
+    else:
+        # 如果没有找到空行，提取后续合理长度的内容（约2000字符）
+        search_content = content_after_target[:2000]
+        print("未找到空行边界，使用固定长度范围")
+    
+    # 使用正则表达式匹配跃迁数据
+    pattern = r'(\d+-\d+[A-Z])\s+->\s+(\d+-\d+[A-Z])\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)'
+    matches = re.findall(pattern, search_content)
+    
+    for match in matches:
+        transition_from, transition_to, energy_ev, energy_cm1, wavelength, fosc = match
+        transitions.append({
+            'from': transition_from,
+            'to': transition_to,
+            'energy_ev': float(energy_ev),
+            'energy_cm1': float(energy_cm1),
+            'wavelength': float(wavelength),
+            'fosc': float(fosc)
+        })
+    
+    print(f"在限定范围内找到 {len(transitions)} 个跃迁")
+    return transitions
+
+def save_transitions_to_file(transitions, output_file):
+    """
+    将跃迁数据保存到单独的文本文件
+    """
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write("Transition\tEnergy(eV)\tEnergy(cm⁻¹)\tWavelength(nm)\tfosc\n")
+        
+        for trans in transitions:
+            f.write(f"{trans['from']} -> {trans['to']}\t")
+            f.write(f"{trans['energy_ev']:.6f}\t")
+            f.write(f"{trans['energy_cm1']:.1f}\t")
+            f.write(f"{trans['wavelength']:.1f}\t \t")
+            f.write(f"{trans['fosc']:.10f}\n")
+
+def gaussian(x, center, intensity, fwhm):
+    """
+    高斯函数
+    x: 能量坐标 (eV)
+    center: 峰中心位置 (eV)
+    intensity: 峰强度 (fosc)
+    fwhm: 半高全宽 (eV)
+    """
+    sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))  # FWHM转sigma
+    return intensity * np.exp(-(x - center)**2 / (2 * sigma**2)) # / (sigma * np.sqrt(2 * np.pi))
+
+
+def generate_broadened_spectrum(transitions, output_file, fwhm, energy_range=None, n_points=5000, show_plot=True):
+    """
+    生成高斯展宽后的光谱
+    
+    参数:
+    transitions: 跃迁列表，每个跃迁包含'energy_ev'和'fosc'
+    output_file: 输出文件名
+    fwhm: 高斯展宽的全宽半最大值
+    energy_range: 能量范围，默认为None自动确定
+    n_points: 能量网格点数
+    show_plot: 是否显示光谱图形，默认为False
+    """
+    if energy_range is None:
+        # 自动确定能量范围
+        energies = [trans['energy_ev'] for trans in transitions]
+        min_energy = min(energies) - 5.0
+        max_energy = max(energies) + 5.0
+        energy_range = (min_energy, max_energy)
+
+    # 创建能量网格
+    energy_grid = np.linspace(energy_range[0], energy_range[1], n_points)
+    spectrum = np.zeros_like(energy_grid)
+
+    # 对每个跃迁施加高斯展宽
+#    for trans in transitions:
+#        spectrum += gaussian(energy_grid, trans['energy_ev'], trans['fosc'], fwhm)
+
+    for trans in transitions:
+        peak = gaussian(energy_grid, trans['energy_ev'], trans['fosc'], fwhm)
+        spectrum = np.maximum(spectrum, peak)
+
+
+    # 保存光谱数据
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write("Energy(eV)\tIntensity\n")
+        for energy, intensity in zip(energy_grid, spectrum):
+            f.write(f"{energy:.6f}\t{intensity:.10f}\n")
+
+    # 如果需要显示图形
+    if show_plot:
+        plot_spectrum(energy_grid, spectrum, transitions)
+    
+    return energy_grid, spectrum
+
+def plot_spectrum(energy_grid, spectrum, transitions):
+    """
+    绘制光谱图形，包含展宽后的光谱和跃迁垂直线
+    """
+    plt.figure(figsize=(10, 6))
+    
+    # 绘制展宽后的光谱
+    plt.plot(energy_grid, spectrum, 'b-', linewidth=1.5, label='Broadened Spectrum')
+    
+    # 绘制跃迁垂直线
+    for i, trans in enumerate(transitions):
+        plt.axvline(x=trans['energy_ev'], ymin=0, ymax=trans['fosc']/max(spectrum)*0.8, 
+                    color='red', linestyle='--', alpha=0.7, 
+                    label='Transitions' if i == 0 else "")
+    
+    plt.xlabel('Energy (eV)')
+    plt.ylabel('Intensity')
+    plt.title('Broadened Spectrum with Transition Lines')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+    plt.gca().xaxis.set_major_locator(ticker.MultipleLocator(1))
+    plt.show()
+
+def gaussian(x, center, intensity, fwhm):
+    """
+    高斯函数
+    """
+    sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+    return intensity * np.exp(-(x - center)**2 / (2 * sigma**2))
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("用法: python command.py output.out")
+        sys.exit(1)
+    
+    input_file = sys.argv[1]
+    
+    if not Path(input_file).exists():
+        print(f"错误: 文件 {input_file} 不存在")
+        sys.exit(1)
+    
+    # 解析光谱数据
+    print("正在解析Orca输出文件...")
+    transitions = parse_orca_spectrum(input_file)
+    
+    if not transitions:
+        print("未找到跃迁数据，请检查文件格式")
+        sys.exit(1)
+    
+    print(f"找到 {len(transitions)} 个跃迁")
+    
+    # 保存原始跃迁数据
+    transitions_file = os.path.splitext(input_file)[0] + "_transitions.txt"
+    save_transitions_to_file(transitions, transitions_file)
+    print(f"跃迁数据已保存到: {transitions_file}")
+    
+    # 生成展宽光谱
+    spectrum_file = os.path.splitext(input_file)[0] + "_spectrum.txt"
+    
+    # 用户可以调整这些参数
+    fwhm = 0.6  # 半高全宽 (eV)，可根据需要调整
+    energy_range = (min(t['energy_ev'] for t in transitions) - 5.0, 
+                    max(t['energy_ev'] for t in transitions) + 5.0)  # 能量范围
+    
+    energy_grid, spectrum = generate_broadened_spectrum(
+        transitions, spectrum_file, fwhm=fwhm, energy_range=energy_range
+    )
+    
+    print(f"展宽光谱已保存到: {spectrum_file}")
+    print(f"光谱参数: FWHM = {fwhm} eV, 能量范围: {energy_range[0]:.2f} - {energy_range[1]:.2f} eV")
+    
+    # 打印前几个跃迁作为示例
+    print("\n前5个跃迁示例:")
+    print("Transition\tEnergy(eV)\tfosc")
+    for i, trans in enumerate(transitions[:5]):
+        print(f"{trans['from']} -> {trans['to']}\t{trans['energy_ev']:.3f}\t{trans['fosc']:.6f}")
+
+if __name__ == "__main__":
+    main()

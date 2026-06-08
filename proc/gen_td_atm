@@ -1,0 +1,59 @@
+#!/bin/bash
+
+# 显示帮助信息
+show_help() {
+    echo "用法 : $(basename "$0") [filename_tdopt.fchk] "
+    echo ""
+    echo "若直接使用 $(basename "$0") 则对所有 *_tdopt.fchk 文件使用"
+    echo ""
+    echo "生成第一激发态的原子尺度电荷跃迁密度矩阵"
+}
+
+# 检查上一个命令的退出状态
+check_error() {
+    if [[ $? -ne 0 ]]; then
+        echo "错误: $1 失败"
+    fi
+}
+
+# 如果传入了 -h 或 --help，显示帮助信息并退出
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    show_help
+    exit 0
+fi
+
+if [ -z "$1" ]; then
+  file_pattern="*.fchk"
+else
+  file_pattern="$1"
+fi
+
+# 执行转换和移动的函数
+deal_fchk() {
+    local ito=$1
+    echo "Converting .fchk"
+    Multiwfn ${ito} << EOF > /dev/null 2>&1 
+18
+8
+2
+${ito/.fchk/}.log
+1
+-1
+2
+atmCTmat.txt
+2
+exit
+EOF
+}
+
+
+for i in $file_pattern ;do
+    deal_fchk $i
+    mv atmCTmat.txt ${i/tdopt.fchk/}atmCTmat.txt
+    mv dislin.png ${i/tdopt.fchk/}atmCTmat.png
+done
+
+wait
+
+exit 0
+

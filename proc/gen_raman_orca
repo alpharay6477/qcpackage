@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""
+提取当前文件夹下所有Orca输出文件中的Raman光谱数据
+进行Lorentzian展宽并按列合并
+"""
+
+import os
+import re
+import numpy as np
+import glob
+
+def read_raman_data(log_file):
+    """
+    从Orca输出文件中读取Raman光谱数据
+    
+    返回:
+    frequencies: 频率数组 (cm^-1)
+    raman_activ: Raman活性数组
+    """
+    frequencies = []
+    raman_activ = []
+    
+    with open(log_file, 'r') as f:
+        lines = f.readlines()
+    
+    # 查找RAMAN SPECTRUM部分
+    in_raman_section = False
+    
+    for line in lines:
+        # 检测Raman光谱部分的开始
+        if 'RAMAN SPECTRUM' in line:
+            in_raman_section = True
+            continue
+        
+        # 检测Raman光谱部分的结束
+        if in_raman_section and ('THERMOCHEMISTRY' in line or 
+                                  '--------------------------' in line):
+            # 如果遇到下一个主要部分，则结束Raman部分
+            if 'THERMOCHEMISTRY' in line:
+                break
+        
+        # 在Raman光谱部分内提取数据
+        if in_raman_section:
+            # 跳过标题和分隔线
+            if ('Mode' in line and 'freq' in line) or \
+               '---' in line or \
+               line.strip() == '' or \
+               'The first frequency' in line or \
+               'The total number' in line:
+                continue
+            
+            # 尝试解析数据行
+            # 格式: "   6:        11.19      0.162955      0.745037"
+            match = re.search(r'^\s*(\d+):\s+([\d.]+)\s+([\d.]+)', line)
+            if match:
+                mode = int(match.group(1))
+                freq = float(match.group(2))
+                activity = float(match.group(3))
+                frequencies.append(freq)
+                raman_activ.append(activity)
+    
+    return np.array(frequencies), np.array(raman_activ)
+
+def lorentzian_broadening(frequencies, intensities, fwhm=4.0, resolution=1.0, 
+                         min_freq=None, max_freq=None, num_points=None):
+    """
+    对光谱进行Lorentzian展宽
+    
+    参数:
+    frequencies: 原始频率数据 (cm^-1)
+    intensities: 原始强度数据
+    fwhm: 半峰宽 (cm^-1)
+    resolution: 输出光谱的分辨率 (cm^-1)
+    min_freq: 输出频率范围下限 (cm^-1)，默认为自动确定
+    max_freq: 输出频率范围上限 (cm^-1)，默认为自动确定
+    num_points: 输出点数，如果指定则忽略resolution
+    
+    返回:
+    x_new: 新的频率网格
+    y_new: 展宽后的光谱强度
+    """
+    if len(frequencies) == 0:
+        return np.array([]), np.array([])
+    
+    # 创建新的频率网格
+    if min_freq is None:
+        min_freq = np.min(frequencies) - 5 * fwhm
+    if max_freq is None:
+        max_freq = np.max(frequencies) + 5 * fwhm
+    
+    # 确保范围合理
+    min_freq = max(0, min_freq)  # 频率不能为负
+    
+    if num_points is not None:
+        x_new = np.linspace(min_freq, max_freq, num_points)
+    else:
+        x_new = np.arange(min_freq, max_freq, resolution)
+    
+    y_new = np.zeros_like(x_new)
+    
+    # Lorentzian函数参数
+    gamma = fwhm / 2.0  # 半高半宽
+    
+    # 对每个原始数据点进行Lorentzian展宽
+    for freq, intensity in zip(frequencies, intensities):
+        if intensity > 0:  # 只处理有强度的峰
+            # Lorentzian函数: L(x) = (1/π) * γ / [(x - x0)² + γ²]
+            lorentz = (intensity / np.pi) * gamma / ((x_new - freq)**2 + gamma**2)
+            y_new += lorentz
+    
+    return x_new, y_new
+
+def process_single_file(log_file, fwhm=4.0, resolution=0.5):
+    """
+    处理单个Orca输出文件
+    
+    参数:
+    log_file: Orca输出文件路径
+    fwhm: Lorentzian展宽半峰宽 (cm^-1)
+    resolution: 输出光谱分辨率 (cm^-1)
+    """
+    # 读取数据
+    frequencies, raman_activ = read_raman_data(log_file)
+    
+    if len(frequencies) == 0:
+        print(f"警告: {log_file} 中未找到Raman数据")
+        return None
+    
+    if len(frequencies) != len(raman_activ):
+        print(f"警告: {log_file} 中频率和强度数据长度不匹配")
+        min_len = min(len(frequencies), len(raman_activ))
+        frequencies = frequencies[:min_len]
+        raman_activ = raman_activ[:min_len]
+    
+    # 进行Lorentzian展宽
+    freq_broadened, spectrum_broadened = lorentzian_broadening(
+        frequencies, raman_activ, fwhm=fwhm, resolution=resolution
+    )
+    
+    return frequencies, raman_activ, freq_broadened, spectrum_broadened
+
+def combine_columns(all_data):
+    """
+    将所有文件的数据按列合并
+    
+    参数:
+    all_data: 列表，每个元素是(filename, freqs, activ, freq_broad, spec_broad)
+    
+    返回:
+    合并后的字符串，以及列信息
+    """
+    if not all_data:
+        return "", []
+    
+    # 确定最大行数
+    max_rows = max(
+        max(len(freqs), len(freq_broad)) 
+        for _, freqs, _, freq_broad, _ in all_data
+    )
+    
+    output_lines = []
+    
+    # 第一行：数据描述
+    headers = []
+    for filename, _, _, _, _ in all_data:
+        base_name = os.path.splitext(filename)[0]
+        headers.extend([
+            f"Frequencies (cm-1)",
+            f"Raman Activity",
+            f"Frequencies Broadened (cm-1)",
+            f"Raman Spectrum"
+        ])
+    output_lines.append("\t".join(headers))
+    
+    # 第二行：文件名称
+    filenames_row = []
+    for filename, _, _, _, _ in all_data:
+        base_name = os.path.splitext(filename)[0]
+        filenames_row.extend([base_name] * 4)
+    output_lines.append("\t".join(filenames_row))
+    
+    # 数据行
+    for i in range(max_rows):
+        row_data = []
+        for filename, freqs, activ, freq_broad, spec_broad in all_data:
+            # 原始频率和强度
+            if i < len(freqs):
+                row_data.append(f"{freqs[i]:.4f}")
+                row_data.append(f"{activ[i]:.6f}")
+            else:
+                row_data.extend(["", ""])
+            
+            # 展宽后的频率和光谱
+            if i < len(freq_broad):
+                row_data.append(f"{freq_broad[i]:.4f}")
+                row_data.append(f"{spec_broad[i]:.8e}")  # 使用科学计数法
+            else:
+                row_data.extend(["", ""])
+        
+        output_lines.append("\t".join(row_data))
+    
+    # 识别列索引
+    col_indices = []
+    for i, (filename, _, _, _, _) in enumerate(all_data):
+        base_name = os.path.splitext(filename)[0]
+        col_indices.append({
+            'filename': base_name,
+            'freq_col': i * 4,
+            'activ_col': i * 4 + 1,
+            'freq_broad_col': i * 4 + 2,
+            'spectrum_col': i * 4 + 3
+        })
+    
+    return "\n".join(output_lines), col_indices
+
+def plot_spectra(all_data, fwhm=4.0):
+    """
+    可选：绘制所有光谱的对比图
+    """
+    try:
+        import matplotlib.pyplot as plt
+        
+        plt.figure(figsize=(12, 6))
+        
+        for filename, freqs, activ, freq_broad, spec_broad in all_data:
+            base_name = os.path.splitext(filename)[0]
+            plt.plot(freq_broad, spec_broad, label=base_name, alpha=0.7)
+        
+        plt.xlabel('Frequency (cm$^{-1}$)')
+        plt.ylabel('Raman Intensity')
+        plt.title(f'Raman Spectra Comparison (FWHM = {fwhm} cm$^{-1}$)')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        output_plot = 'raman_spectra_comparison.png'
+        plt.savefig(output_plot, dpi=300)
+        print(f"光谱对比图已保存到: {output_plot}")
+        plt.close()
+        
+    except ImportError:
+        print("提示: 安装matplotlib可以生成光谱对比图")
+
+def main():
+    """
+    主函数：处理当前文件夹下所有Orca输出文件
+    """
+    # 配置参数
+    FWHM = 4.0  # 半峰宽 (cm^-1)
+    RESOLUTION = 0.5  # 输出分辨率 (cm^-1)
+    PLOT_SPECTRA = True  # 是否绘制对比图
+    OUTPUT_FILE = "combined_raman_spectra.txt"  # 输出文件名
+    
+    # 查找所有可能的Orca输出文件
+    # Orca输出文件通常以.out结尾，但也可能是.log或其他
+    extensions = ['*.out', '*.log', '*.orca', '*.txt']
+    log_files = []
+    for ext in extensions:
+        log_files.extend(glob.glob(ext))
+    
+    # 去重
+    log_files = list(set(log_files))
+    
+    if not log_files:
+        print("当前文件夹下未找到Orca输出文件")
+        print("请确保文件扩展名为 .out, .log, .orca 或 .txt")
+        return
+    
+    print(f"找到 {len(log_files)} 个可能的Orca输出文件")
+    print(f"处理参数: FWHM = {FWHM} cm^-1, 分辨率 = {RESOLUTION} cm^-1\n")
+    
+    all_data = []
+    
+    # 处理每个文件
+    for log_file in sorted(log_files):
+        print(f"处理文件: {log_file}")
+        
+        try:
+            result = process_single_file(log_file, fwhm=FWHM, resolution=RESOLUTION)
+            if result is not None:
+                frequencies, raman_activ, freq_broadened, spectrum_broadened = result
+                
+                if len(frequencies) > 0:
+                    all_data.append((log_file, frequencies, raman_activ, 
+                                   freq_broadened, spectrum_broadened))
+                    
+                    # 保存单个文件的结果
+                    save_single_file(log_file, frequencies, raman_activ, 
+                                   freq_broadened, spectrum_broadened)
+                    
+                    print(f"  ✓ 提取了 {len(frequencies)} 个振动模式")
+                    print(f"    频率范围: {min(frequencies):.2f} - {max(frequencies):.2f} cm^-1")
+                    print(f"    最大Raman活性: {max(raman_activ):.6f}")
+                else:
+                    print(f"  ✗ 未找到Raman数据")
+        except Exception as e:
+            print(f"  ✗ 处理失败: {str(e)}")
+    
+    if all_data:
+        print(f"\n成功处理 {len(all_data)} 个文件")
+        
+        # 合并所有数据
+        combined_data, col_indices = combine_columns(all_data)
+        
+        # 保存合并数据
+        with open(OUTPUT_FILE, 'w') as f:
+            f.write(combined_data)
+        
+        print(f"合并数据已保存到: {OUTPUT_FILE}")
+        
+        # 保存列索引信息
+        with open("column_index.txt", 'w') as f:
+            f.write("文件列索引信息:\n")
+            f.write("=" * 60 + "\n")
+            for info in col_indices:
+                f.write(f"\n{info['filename']}:\n")
+                f.write(f"  原始频率列: {info['freq_col'] + 1}\n")
+                f.write(f"  Raman活性列: {info['activ_col'] + 1}\n")
+                f.write(f"  展宽频率列: {info['freq_broad_col'] + 1}\n")
+                f.write(f"  光谱强度列: {info['spectrum_col'] + 1}\n")
+        
+        # 绘制对比图
+        if PLOT_SPECTRA:
+            try:
+                plot_spectra(all_data, fwhm=FWHM)
+            except Exception as e:
+                print(f"绘图失败: {str(e)}")
+        
+        # 打印统计信息
+        print("\n" + "=" * 60)
+        print("处理统计:")
+        for i, (filename, freqs, activ, freq_broad, spec_broad) in enumerate(all_data):
+            base_name = os.path.splitext(filename)[0]
+            print(f"\n{i+1}. {base_name}:")
+            print(f"   原始数据点: {len(freqs)}")
+            print(f"   展宽后数据点: {len(freq_broad)}")
+            print(f"   频率范围: {min(freqs):.2f} - {max(freqs):.2f} cm^-1")
+            print(f"   最大Raman活性: {max(activ):.6f}")
+            print(f"   总积分强度: {np.sum(spec_broad) * RESOLUTION:.4f}")
+    else:
+        print("\n未成功处理任何包含Raman数据的文件")
+
+def save_single_file(filename, freqs, activ, freq_broad, spec_broad):
+    """
+    保存单个文件的处理结果
+    """
+    base_name = os.path.splitext(filename)[0]
+    output_file = f"{base_name}_raman_processed.txt"
+    
+    with open(output_file, 'w') as f:
+        # 写入头部
+        f.write("# Raman Spectrum Analysis\n")
+        f.write(f"# Source file: {filename}\n")
+        f.write(f"# Number of modes: {len(freqs)}\n\n")
+        
+        # 写入原始数据
+        f.write("# Original data\n")
+        f.write("Mode\tFrequency (cm-1)\tRaman Activity\n")
+        for i, (freq, act) in enumerate(zip(freqs, activ)):
+            f.write(f"{i+1}\t{freq:.4f}\t{act:.6f}\n")
+        
+        f.write("\n\n# Broadened spectrum\n")
+        f.write("Frequency (cm-1)\tIntensity\n")
+        for freq, intens in zip(freq_broad, spec_broad):
+            f.write(f"{freq:.4f}\t{intens:.8e}\n")
+    
+    print(f"  单独结果已保存到: {output_file}")
+
+if __name__ == "__main__":
+    main()
